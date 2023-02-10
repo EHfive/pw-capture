@@ -1,0 +1,47 @@
+[package]
+name = "pw-capture-client"
+description = "PipeWire client library specialized for video capture"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.64.0"
+authors = ["Huang-Huang Bao <i@eh5.me>"]
+homepage = "https://github.com/EHfive/pw-capture"
+repository = "https://github.com/EHfive/pw-capture"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0.68"
+crossbeam-channel = "0.5.6"
+dashmap = "5.4.0"
+fortify = "0.4.1"
+libspa = { git = "https://gitlab.freedesktop.org/eh5/pipewire-rs", branch = "pw-capture" }
+libspa-sys = { git = "https://gitlab.freedesktop.org/eh5/pipewire-rs", branch = "pw-capture" }
+pipewire = { git = "https://gitlab.freedesktop.org/eh5/pipewire-rs", branch = "pw-capture", features = [
+    "v0_3_41",
+] }
+pipewire-sys = { git = "https://gitlab.freedesktop.org/eh5/pipewire-rs", branch = "pw-capture" }
+num_enum = "0.5.9"
+tracing = "0.1.37"
+
+[dependencies.libc]
+version = "0.2.139"
+default-features = false
+
+[dependencies.ash]
+version = "0.37.1"
+default-features = false
+optional = true
+
+[dependencies.educe]
+version = "0.4.20"
+default-features = false
+features = ["Debug"]
+
+[dependencies.trait-enumizer]
+version = "0.1.1"
+features = ["crossbeam-channel"]
+
+[features]
+default = []
+frontend_vulkan = ["ash"] # Vulkan image handle
+frontend_gl = []          # TODO, GL image handle

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://github.com/LunarG/VulkanTools/raw/main/vkconfig_core/layers/layers_schema.json",
+  "file_format_version": "1.2.0",
+  "layer": {
+    "name": "VK_LAYER_EH5_pwcapture",
+    "type": "GLOBAL",
+    "library_path": "../target/debug/libpw_capture_vk.so",
+    "api_version": "1.1.0",
+    "implementation_version": "1",
+    "description": "PipeWire Capture Vulkan Layer",
+    "enable_environment": {
+      "ENABLE_PW_CAPTURE": "1"
+    },
+    "disable_environment": {
+      "DISABLE_PW_CAPTURE": ""
+    }
+  }
+}

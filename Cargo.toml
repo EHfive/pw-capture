@@ -1,0 +1,7 @@
+[workspace]
+members = ["client", "vulkan"]
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

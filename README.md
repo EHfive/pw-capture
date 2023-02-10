@@ -58,7 +58,7 @@ gst-launch-1.0 -e pipewiresrc target-object=999 \
 # to encode with VA-API
 gst-launch-1.0 -e pipewiresrc target-object=999 min-buffers=64 \
     ! glupload ! glcolorconvert ! gldownload \
-    ! queue ! videorate ! 'video/x-raw,framerate=60/1' \
+    ! videorate ! 'video/x-raw,framerate=60/1' ! queue \
     ! vah264enc ! h264parse ! mp4mux ! filesink location=test.mp4
 ```
 
@@ -69,3 +69,5 @@ gst-launch-1.0 -e pipewiresrc target-object=999 min-buffers=64 \
 - [ ] OpenGL support
 - [ ] Support color conversion to common YUV formats with render pipeline
 - [ ] Renegotiate stream format on Vulkan swapchain recreation
+- [ ] Passing cursor position in buffer meta
+- [ ] Better handling of node description & Wine application node name

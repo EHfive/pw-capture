@@ -12,10 +12,10 @@ use anyhow::{anyhow, Result};
 use ash::vk;
 use crossbeam_channel::{bounded, Sender};
 use educe::Educe;
+use log::{debug, error, info, trace, warn};
 use pipewire as pw;
 use pw::properties;
 use pw::stream::ListenerBuilderT;
-use tracing::{debug, error, info, trace, warn};
 use trait_enumizer::{crossbeam_class, enumizer};
 
 // allows 64 frames latency of buffer consuming
@@ -91,9 +91,8 @@ pub struct BufferInfo {
 pub enum BufferUserHandle {
     #[cfg(feature = "ash")]
     VkImage(vk::Image),
+    Other(u64),
 }
-
-// type StreamData = Option<StreamImpl>;
 
 #[derive(Default)]
 struct StreamData {

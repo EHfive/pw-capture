@@ -1,8 +1,10 @@
+use crate::utils::*;
+
 use anyhow::Result;
 use ash::extensions::khr;
 use ash::prelude::VkResult;
 use ash::vk;
-use tracing::{debug, trace};
+use function_name::named;
 
 pub struct FenceState {
     fence: vk::Fence,
@@ -36,6 +38,7 @@ impl FenceState {
     }
 }
 
+#[named]
 pub unsafe fn get_supported_modifiers(
     khr_phy_props2: &khr::GetPhysicalDeviceProperties2,
     phy_device: vk::PhysicalDevice,
@@ -192,7 +195,7 @@ pub unsafe fn create_target_image(
         .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
 
     let dma_buf_fd = khr_memfd.get_memory_fd(&get_fd_info)?;
-    debug!("dma-buf fd: {}", dma_buf_fd);
+    // debug!("dma-buf fd: {}", dma_buf_fd);
 
     let fds = (0..planes.clamp(1, 4))
         .map(|i| {

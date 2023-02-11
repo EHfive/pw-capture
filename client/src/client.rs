@@ -11,9 +11,9 @@ use crossbeam_channel::{bounded, Sender};
 use dashmap::DashMap;
 use educe::Educe;
 use fortify::*;
+use log::{debug, trace};
 use pipewire as pw;
 use pw::properties;
-use tracing::{debug, trace};
 use trait_enumizer::{crossbeam_class, enumizer};
 
 #[enumizer(

@@ -17,10 +17,9 @@ use ash::extensions::khr;
 use ash::vk;
 use ash_layer::*;
 use dashmap::DashMap;
+use function_name::named;
 use libc;
 use once_cell::sync::{Lazy, OnceCell};
-use tracing::{debug, error, info, instrument, span, trace, warn, Level};
-use tracing_subscriber::FmtSubscriber;
 
 struct LayerInstanceValid {
     // khr_surface: khr::Surface,
@@ -94,21 +93,11 @@ struct LayerSwapchain {
     export_data: Option<ExportData>,
 }
 
-static TRACING: Lazy<()> = Lazy::new(|| {
-    let subscriber = FmtSubscriber::builder()
-        .with_ansi(true)
-        .without_time()
-        .with_max_level(Level::DEBUG)
-        .with_file(true)
-        .with_line_number(true)
-        .finish();
+static LOGGING: Lazy<()> = Lazy::new(|| init_logger());
 
-    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
-});
-
-static mut CLIENT: Lazy<Option<client::Client>> = Lazy::new(|| {
+static CLIENT: Lazy<Option<client::Client>> = Lazy::new(|| {
     client::Client::new()
-        .map_err(|e| error!("failed to create client: {e:?}"))
+        .map_err(|e| error!(target:"client init", "failed to create client: {e:?}"))
         .ok()
 });
 
@@ -147,11 +136,11 @@ macro_rules! map_result {
 
 #[no_mangle]
 #[doc = "https://vulkan.lunarg.com/doc/view/1.3.236.0/linux/LoaderLayerInterface.html#user-content-layer-interface-version-2"]
-#[instrument]
+#[named]
 pub unsafe extern "system" fn vkNegotiateLoaderLayerInterfaceVersion(
     p_version_struct: *mut NegotiateLayerInterface,
 ) -> vk::Result {
-    Lazy::force(&TRACING);
+    Lazy::force(&LOGGING);
 
     let version_struct = &mut *p_version_struct;
     debug!(
@@ -173,7 +162,7 @@ pub unsafe extern "system" fn vkNegotiateLoaderLayerInterfaceVersion(
 const _: PFN_vkNegotiateLoaderLayerInterfaceVersion = vkNegotiateLoaderLayerInterfaceVersion;
 
 #[no_mangle]
-#[instrument]
+#[named]
 unsafe extern "system" fn pwcap_vkGetInstanceProcAddr(
     instance: vk::Instance,
     p_name: *const c_char,
@@ -190,9 +179,10 @@ unsafe extern "system" fn pwcap_vkGetInstanceProcAddr(
             _ => break,
         };
         debug!(
-            name = name.to_string_lossy().as_ref(),
-            ?pfn,
-            "intercept instance function"
+            target: function_name!(),
+            "intercept instance function {} {:?}",
+            name.to_string_lossy(),
+            pfn,
         );
         return mem::transmute(pfn);
     }
@@ -202,7 +192,7 @@ unsafe extern "system" fn pwcap_vkGetInstanceProcAddr(
 const _: vk::PFN_vkGetInstanceProcAddr = pwcap_vkGetInstanceProcAddr;
 
 #[no_mangle]
-#[instrument]
+#[named]
 unsafe extern "system" fn pwcap_vkGetDeviceProcAddr(
     device: vk::Device,
     p_name: *const c_char,
@@ -216,15 +206,21 @@ unsafe extern "system" fn pwcap_vkGetDeviceProcAddr(
             _ => break,
         };
         debug!(
-            name = name.to_string_lossy().as_ref(),
-            ?pfn,
-            "intercept device function"
+            target: function_name!(),
+            "intercept instance function {} {:?}",
+            name.to_string_lossy(),
+            pfn,
         );
         return mem::transmute(pfn);
     }
 
     let gdpa = GDPA_MAP.get(&device)?;
     let res = gdpa(device, p_name);
+    if res.is_none() {
+        // for extension command, return NULL if next layer does not support given command
+        return None;
+    }
+
     loop {
         let pfn: *const () = match name.to_bytes() {
             b"vkCreateSwapchainKHR" => pwcap_vkCreateSwapchainKHR as _,
@@ -234,14 +230,11 @@ unsafe extern "system" fn pwcap_vkGetDeviceProcAddr(
             b"vkQueuePresentKHR" => pwcap_vkQueuePresentKHR as _,
             _ => break,
         };
-        if res.is_none() {
-            // for extension command, return NULL if next layer does not support given command
-            break;
-        }
         debug!(
-            name = name.to_string_lossy().as_ref(),
-            ?pfn,
-            "intercept device function"
+            target: "pwcap_vkGetDeviceProcAddr",
+            "intercept device function {} {:?}",
+            name.to_string_lossy().as_ref(),
+            pfn
         );
         return mem::transmute(pfn);
     }
@@ -257,7 +250,7 @@ const LAYER_INSTANCE_EXTENSIONS: &[&'static CStr] = &[
 ];
 
 #[no_mangle]
-#[instrument]
+#[named]
 unsafe extern "system" fn pwcap_vkCreateInstance(
     p_create_info: *const vk::InstanceCreateInfo,
     p_allocator: *const vk::AllocationCallbacks,
@@ -280,7 +273,7 @@ unsafe extern "system" fn pwcap_vkCreateInstance(
     let gipa = layer_info
         .pfn_next_get_instance_proc_addr
         .expect("broken layer info");
-    debug!(gipa = ?(gipa as *const ()));
+    debug!("GIPA: {:?}", gipa as *const ());
 
     let name = CStr::from_bytes_with_nul_unchecked(b"vkCreateInstance\0");
     let create_instance: vk::PFN_vkCreateInstance =
@@ -297,7 +290,7 @@ unsafe extern "system" fn pwcap_vkCreateInstance(
     for &name in LAYER_INSTANCE_EXTENSIONS {
         extensions.insert(name.to_owned());
     }
-    debug!(?extensions, "instance extensions");
+    debug!("instance extensions: {:?}", extensions);
     let extensions_data: Vec<*const i8> = extensions.iter().map(|ext| ext.as_ptr()).collect();
 
     let mut create_info_ext = create_info.clone();
@@ -316,7 +309,7 @@ unsafe extern "system" fn pwcap_vkCreateInstance(
 
     let instance = *p_instance;
     assert!(instance != vk::Instance::null());
-    debug!(?instance, "created instance");
+    debug!("created instance: {:?}", instance);
 
     // IMPORTANT: this should be put before any code executing dispatch_next_vkGetInstanceProcAddr
     //            i.e. ash::Instance::load and khr::Surface::new
@@ -359,6 +352,7 @@ unsafe extern "system" fn pwcap_vkCreateInstance(
 }
 const _: vk::PFN_vkCreateInstance = pwcap_vkCreateInstance;
 
+#[named]
 unsafe fn destroy_instance(
     instance: vk::Instance,
     p_allocator: *const vk::AllocationCallbacks,
@@ -381,7 +375,7 @@ unsafe fn destroy_instance(
 }
 
 #[no_mangle]
-#[instrument]
+#[named]
 unsafe extern "system" fn pwcap_vkDestroyInstance(
     instance: vk::Instance,
     p_allocator: *const vk::AllocationCallbacks,
@@ -403,7 +397,7 @@ const LAYER_DEVICE_EXTENSIONS: &[&'static CStr] = &[
 ];
 
 #[no_mangle]
-#[instrument]
+#[named]
 unsafe extern "system" fn pwcap_vkCreateDevice(
     physical_device: vk::PhysicalDevice,
     p_create_info: *const vk::DeviceCreateInfo,
@@ -462,7 +456,7 @@ unsafe extern "system" fn pwcap_vkCreateDevice(
 
     let device = *p_device;
     assert!(device != vk::Device::null());
-    debug!(?device, "device created");
+    debug!("device created {:?}", device);
 
     // IMPORTANT: this should be put before any code executing dispatch_next_vkGetDeviceProcAddr,
     //            i.e. `ash::Device::load()` and `khr::Swapchain::new()`
@@ -500,17 +494,12 @@ unsafe extern "system" fn pwcap_vkCreateDevice(
         } = queue_create_info;
         let family_props = queue_family_properties[family_index as usize];
 
-        let span = span!(
-            Level::DEBUG,
-            "device queue family",
-            family_index,
-            queue_flags = ?family_props.queue_flags
-        );
-        let _enter = span.enter();
-
         for index in 0..queue_count {
             let queue = ash_device.get_device_queue(family_index, index);
-            debug!(?index, ?queue, "device queue");
+            debug!(
+                "device queue, family:{} index:{} handle:{:?}",
+                family_index, index, queue
+            );
             queues.push(queue);
             QUEUE_MAP.insert(
                 queue,
@@ -540,6 +529,7 @@ unsafe extern "system" fn pwcap_vkCreateDevice(
 }
 const _: vk::PFN_vkCreateDevice = pwcap_vkCreateDevice;
 
+#[named]
 unsafe fn destroy_device(
     device: vk::Device,
     p_allocator: *const vk::AllocationCallbacks,
@@ -559,7 +549,7 @@ unsafe fn destroy_device(
 }
 
 #[no_mangle]
-#[instrument]
+#[named]
 unsafe extern "system" fn pwcap_vkDestroyDevice(
     device: vk::Device,
     p_allocator: *const vk::AllocationCallbacks,
@@ -612,7 +602,7 @@ unsafe extern "system" fn dispatch_next_vkGetDeviceProcAddr(
 }
 const _: vk::PFN_vkGetDeviceProcAddr = dispatch_next_vkGetDeviceProcAddr;
 
-#[instrument]
+#[named]
 unsafe fn on_fixate_format(
     device: vk::Device,
     swapchain: vk::SwapchainKHR,
@@ -653,7 +643,7 @@ unsafe fn on_fixate_format(
             .filter(|props| info.modifiers.contains(&props.drm_format_modifier))
             .collect::<Vec<_>>();
 
-        debug!(?modifiers);
+        debug!("filtered modifiers: {:?}", modifiers);
 
         let modifier = modifiers
             .get(0)
@@ -730,7 +720,7 @@ unsafe fn on_fixate_format(
         break (cmd_pool, cmd_buffers);
     };
 
-    info!(format = ?format_info, "stream format fixated");
+    info!("stream format fixated: {:?}", format_info);
 
     ly_swapchain.export_data = Some(ExportData {
         format: format_info.vk_format,
@@ -745,7 +735,7 @@ unsafe fn on_fixate_format(
     Ok(client::FixateFormat { modifier, planes })
 }
 
-#[instrument]
+#[named]
 unsafe fn on_add_buffer(
     device: vk::Device,
     swapchain: vk::SwapchainKHR,
@@ -784,7 +774,7 @@ unsafe fn on_add_buffer(
         let plane_size = fds[0].1.size;
         assert!(plane_size > 0);
 
-        debug!(?modifier, ?fds, "fd infos");
+        debug!("fd infos, modifier:{}, planes: {:?}", modifier, fds);
 
         let planes = fds
             .iter()
@@ -817,7 +807,7 @@ unsafe fn on_add_buffer(
     }
 }
 
-#[instrument]
+#[named]
 unsafe fn on_remove_buffer(
     device: vk::Device,
     swapchain: vk::SwapchainKHR,
@@ -853,6 +843,7 @@ unsafe fn on_remove_buffer(
     Ok(())
 }
 
+#[named]
 unsafe fn on_process_buffer(
     device: vk::Device,
     swapchain: vk::SwapchainKHR,
@@ -887,7 +878,7 @@ unsafe fn on_process_buffer(
         .get_mut(&src_image)
         .ok_or(anyhow!("src image removed"))?;
 
-    trace!(seq, data_seq = data.seq);
+    trace!("src image seq: {}, export image seq: {}", data.seq, seq);
     if seq == data.seq {
         data.fence.wait_and_reset(&ly_device.ash_device)?;
     }
@@ -895,7 +886,7 @@ unsafe fn on_process_buffer(
     Ok(())
 }
 
-#[instrument(skip(khr_phy_props2))]
+#[named]
 unsafe fn create_stream(
     khr_phy_props2: &khr::GetPhysicalDeviceProperties2,
     phy_device: vk::PhysicalDevice,
@@ -909,7 +900,7 @@ unsafe fn create_stream(
     // TODO: check if swapchain format is valid, e.g. supports TRANSFER_SRC
 
     info!(
-        "creating stream:  width:{} height:{} format:{:?}",
+        "creating stream, extent: {}x{} format: {:?}",
         width, height, src_format_info
     );
 
@@ -958,7 +949,7 @@ unsafe fn create_stream(
         .collect::<Vec<_>>();
 
         if modifiers.is_empty() {
-            debug!(?format_info, "does not support export modifier");
+            debug!("does not support export modifier, {:?}", format_info);
             continue;
         }
 
@@ -989,7 +980,7 @@ unsafe fn create_stream(
         // TODO: memfd or linear dma-buf
     }
 
-    debug!(?enum_formats, "added formats");
+    debug!("added formats, {:?}", enum_formats);
 
     let stream_info = client::StreamInfo {
         width,
@@ -1022,6 +1013,7 @@ unsafe fn create_stream(
     Ok(stream)
 }
 
+#[named]
 unsafe fn create_swapchain_khr(
     device: vk::Device,
     p_create_info: *const vk::SwapchainCreateInfoKHR,
@@ -1117,6 +1109,7 @@ unsafe fn create_swapchain_khr(
 }
 
 #[no_mangle]
+#[named]
 unsafe extern "system" fn pwcap_vkCreateSwapchainKHR(
     device: vk::Device,
     p_create_info: *const vk::SwapchainCreateInfoKHR,
@@ -1132,12 +1125,13 @@ unsafe extern "system" fn pwcap_vkCreateSwapchainKHR(
 }
 const _: vk::PFN_vkCreateSwapchainKHR = pwcap_vkCreateSwapchainKHR;
 
+#[named]
 unsafe fn destroy_swapchain_khr(
     device: vk::Device,
     swapchain: vk::SwapchainKHR,
     p_allocator: *const vk::AllocationCallbacks,
 ) -> Result<()> {
-    debug!("destroying");
+    debug!("destroying: {:?}", swapchain);
 
     if let Some(ly_swapchain) = SWAPCHAIN_MAP.get(&swapchain) {
         if let Some(stream) = &ly_swapchain.stream {
@@ -1174,7 +1168,7 @@ unsafe fn destroy_swapchain_khr(
 }
 
 #[no_mangle]
-#[instrument]
+#[named]
 unsafe extern "system" fn pwcap_vkDestroySwapchainKHR(
     device: vk::Device,
     swapchain: vk::SwapchainKHR,
@@ -1188,7 +1182,6 @@ unsafe fn queue_present_khr(
     queue: vk::Queue,
     p_present_info: *const vk::PresentInfoKHR,
 ) -> Result<vk::Result> {
-    trace!("present");
     let ly_queue = QUEUE_MAP.get(&queue).ok_or(vk::Result::ERROR_DEVICE_LOST)?;
     let ly_device = DEVICE_MAP
         .get(&ly_queue.device)
@@ -1292,7 +1285,7 @@ unsafe fn acquire_next_image2_khr(
 }
 
 #[no_mangle]
-#[instrument]
+#[named]
 unsafe extern "system" fn pwcap_vkAcquireNextImageKHR(
     device: vk::Device,
     swapchain: vk::SwapchainKHR,
@@ -1307,6 +1300,7 @@ unsafe extern "system" fn pwcap_vkAcquireNextImageKHR(
 const _: vk::PFN_vkAcquireNextImageKHR = pwcap_vkAcquireNextImageKHR;
 
 #[no_mangle]
+#[named]
 unsafe extern "system" fn pwcap_vkAcquireNextImage2KHR(
     device: vk::Device,
     p_acquire_info: *const vk::AcquireNextImageInfoKHR,
@@ -1317,7 +1311,7 @@ unsafe extern "system" fn pwcap_vkAcquireNextImage2KHR(
 const _: vk::PFN_vkAcquireNextImage2KHR = pwcap_vkAcquireNextImage2KHR;
 
 #[no_mangle]
-#[instrument]
+#[named]
 unsafe extern "system" fn pwcap_vkQueuePresentKHR(
     queue: vk::Queue,
     p_present_info: *const vk::PresentInfoKHR,
@@ -1326,6 +1320,7 @@ unsafe extern "system" fn pwcap_vkQueuePresentKHR(
 }
 const _: vk::PFN_vkQueuePresentKHR = pwcap_vkQueuePresentKHR;
 
+#[named]
 unsafe fn capture_swapchain(
     ash_device: &ash::Device,
     swapchain: vk::SwapchainKHR,
@@ -1354,7 +1349,7 @@ unsafe fn capture_swapchain(
         _ => unreachable!(),
     };
     let duration = start.elapsed();
-    trace!(?duration, "dequeue");
+    trace!("dequeue time: {:?}", duration);
 
     let ly_swapchain = SWAPCHAIN_MAP
         .get(&swapchain)
@@ -1418,11 +1413,12 @@ unsafe fn capture_swapchain(
     let start = Instant::now();
     stream.try_queue_buffer_process(buffer)???;
     let duration = start.elapsed();
-    trace!(?duration, "process");
+    trace!("process time: {:?}", duration);
 
     Ok(Some(res))
 }
 
+#[named]
 unsafe fn capture(
     ash_device: &ash::Device,
     src_queue_family_index: u32,

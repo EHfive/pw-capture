@@ -11,21 +11,17 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1.0.68"
-crossbeam-channel = "0.5.6"
+crossbeam-channel = { version = "0.5.6", default-features = false }
 dashmap = "5.4.0"
 fortify = "0.4.1"
 libspa = { git = "https://gitlab.freedesktop.org/eh5/pipewire-rs", branch = "pw-capture" }
 libspa-sys = { git = "https://gitlab.freedesktop.org/eh5/pipewire-rs", branch = "pw-capture" }
+log = "*"
+num_enum = "0.5.9"
 pipewire = { git = "https://gitlab.freedesktop.org/eh5/pipewire-rs", branch = "pw-capture", features = [
     "v0_3_41",
 ] }
 pipewire-sys = { git = "https://gitlab.freedesktop.org/eh5/pipewire-rs", branch = "pw-capture" }
-num_enum = "0.5.9"
-tracing = "0.1.37"
-
-[dependencies.libc]
-version = "0.2.139"
-default-features = false
 
 [dependencies.ash]
 version = "0.37.1"
@@ -36,6 +32,10 @@ optional = true
 version = "0.4.20"
 default-features = false
 features = ["Debug"]
+
+[dependencies.libc]
+version = "0.2.139"
+default-features = false
 
 [dependencies.trait-enumizer]
 version = "0.1.1"

@@ -13,7 +13,7 @@ license = "MIT"
 anyhow = "1.0.68"
 crossbeam-channel = { version = "0.5.6", default-features = false }
 dashmap = "5.4.0"
-fortify = "0.4.1"
+escher = { version = "0.3.0", git = "https://github.com/petrosagg/escher" }
 libspa = { git = "https://gitlab.freedesktop.org/eh5/pipewire-rs", branch = "pw-capture" }
 libspa-sys = { git = "https://gitlab.freedesktop.org/eh5/pipewire-rs", branch = "pw-capture" }
 log = "*"

@@ -10,7 +10,7 @@ use anyhow::{anyhow, Result};
 use crossbeam_channel::{bounded, Sender};
 use dashmap::DashMap;
 use educe::Educe;
-use fortify::*;
+use escher::{Escher, Rebindable};
 use log::{debug, trace};
 use pipewire as pw;
 use pw::properties;
@@ -38,10 +38,10 @@ struct ClientImplInner {
     mainloop: pw::MainLoop,
     core: pw::Core,
     stream_next_id: usize,
-    stream_map: DashMap<usize, Fortify<StreamImplItem<'static>>>,
+    stream_map: DashMap<usize, Escher<'static, StreamImplItem<'static>>>,
 }
 
-#[derive(Lower)]
+#[derive(Rebindable)]
 struct StreamImplItem<'a> {
     _loop_: &'a pw::LoopRef,
     _receiver: pw::channel::AttachedReceiver<'a, StreamMessage>,
@@ -76,14 +76,15 @@ impl ClientMethods for ClientImpl {
 
         let mainloop = self.inner.borrow().mainloop.clone();
         let (pw_sender, pw_receiver) = pw::channel::channel::<StreamMessage>();
-        let item = fortify! {
+        let item = Escher::new(|r| async move {
             let receiver = stream_impl.attach(&mainloop, pw_receiver);
-            yield StreamImplItem {
+            r.capture(StreamImplItem {
                 _loop_: &mainloop,
                 _receiver: receiver,
-                _stream_impl: stream_impl
-            };
-        };
+                _stream_impl: stream_impl,
+            })
+            .await
+        });
         self.inner.borrow_mut().stream_map.insert(id, item);
 
         Ok(Stream { pw_sender })

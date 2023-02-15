@@ -40,6 +40,9 @@ impl GlHandle {
     unsafe fn from_raw(val: u64) -> Self {
         Self(val)
     }
+    unsafe fn as_raw(&self) -> u64 {
+        self.0
+    }
     unsafe fn from_ptr<T>(ptr: *const T) -> Self {
         Self(ptr as u64)
     }
@@ -164,6 +167,11 @@ impl Drop for ExportTexture {
                 } => {
                     let glx = glx();
                     let x11 = X11_LIB.as_ref().unwrap();
+                    glx.ReleaseTexImageEXT(
+                        dpy as _,
+                        glx_pixmap.as_raw(),
+                        glx_sys::FRONT_LEFT_EXT as _,
+                    );
                     glx.DestroyPixmap(dpy as _, glx_pixmap.as_ptr::<c_void>() as _);
                     (x11.XFreePixmap)(dpy as _, x_pixmap.as_ptr::<c_void>() as _);
                 }
@@ -181,6 +189,7 @@ struct LayerDisplay {
 #[allow(unused)]
 struct LayerSurface {
     native: NativeIface,
+    context: GlHandle,
     width: u32,
     height: u32,
     stream: Option<client::Stream>,
@@ -359,6 +368,7 @@ unsafe fn do_intercept_glx(name: &CStr) -> Option<*mut c_void> {
         b"glXSwapBuffers" => glXSwapBuffers as _,
         b"glXSwapBuffersMscOML" => glXSwapBuffersMscOML as _,
         b"glXDestroyWindow" => glXDestroyWindow as _,
+        b"glXDestroyContext" => glXDestroyContext as _,
         _ => return None,
     };
     debug!("address: {:?} proc: {}", pfn, name.to_string_lossy());
@@ -377,6 +387,7 @@ unsafe fn do_intercept_egl(name: &CStr) -> Option<*mut c_void> {
         b"eglSwapBuffersWithDamageEXT" => eglSwapBuffersWithDamageEXT as _,
         b"eglSwapBuffersWithDamageKHR" => eglSwapBuffersWithDamageKHR as _,
         b"eglDestroySurface" => eglDestroySurface as _,
+        b"eglDestroyContext" => eglDestroyContext as _,
         _ => return None,
     };
     debug!("address: {:?} proc: {}", pfn, name.to_string_lossy());
@@ -423,6 +434,9 @@ pub unsafe extern "C" fn glXSwapBuffers(dpy: *mut glx_t::Display, drawable: glx_
 
     try_capture(NativeIface::Glx, dpy as _, drawable as _);
 
+    let mut val: u32 = 2;
+    glx.QueryDrawable(dpy, drawable, glx_sys::TEXTURE_FORMAT_EXT as _, &mut val);
+
     glx.SwapBuffers(dpy, drawable)
 }
 
@@ -448,6 +462,15 @@ pub unsafe extern "C" fn glXDestroyWindow(dpy: *mut glx_t::Display, win: glx_t::
     destroy_surface(dpy as _, win as _);
 
     glx.DestroyWindow(dpy, win)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glXDestroyContext(dpy: *mut glx_t::Display, ctx: glx_t::GLXContext) {
+    let glx = glx();
+
+    destroy_context(dpy as _, ctx);
+
+    glx.DestroyContext(dpy, ctx)
 }
 
 #[no_mangle]
@@ -537,6 +560,8 @@ pub unsafe extern "C" fn eglDestroyContext(
     ctx: egl_t::EGLContext,
 ) -> egl_t::EGLBoolean {
     let egl = egl();
+
+    destroy_context(dpy, ctx);
 
     egl.DestroyContext(dpy, ctx)
 }
@@ -706,6 +731,23 @@ unsafe fn try_capture(native: NativeIface, dpy: *const c_void, surface: *const c
     }
 }
 
+unsafe fn get_current_context(native: NativeIface) -> Option<GlHandle> {
+    let ptr = match native {
+        NativeIface::Egl => {
+            let egl = egl();
+            egl.GetCurrentContext()
+        }
+        NativeIface::Glx => {
+            let glx = glx();
+            glx.GetCurrentContext()
+        }
+    };
+    if ptr.is_null() {
+        return None;
+    }
+    Some(glhandle!(ptr))
+}
+
 #[named]
 unsafe fn try_init_surface(
     native: NativeIface,
@@ -713,6 +755,7 @@ unsafe fn try_init_surface(
     surface: *const c_void,
 ) -> Result<()> {
     let handle = glhandle!(surface);
+    let context = get_current_context(native).ok_or(anyhow!("no context"))?;
     let (width, height) = query_surface_extent(native, dpy, surface);
     let gl = gl(native);
 
@@ -724,6 +767,9 @@ unsafe fn try_init_surface(
     }
 
     if let Some(mut ly_surface) = SURFACE_MAP.get_mut(&handle) {
+        if ly_surface.context != context {
+            return Err(anyhow!("context switching not supported"));
+        }
         if ly_surface.width == width && ly_surface.height == height {
             return Ok(());
         }
@@ -752,6 +798,7 @@ unsafe fn try_init_surface(
 
     let ly_surface = LayerSurface {
         native,
+        context,
         width,
         height,
         stream,
@@ -767,6 +814,18 @@ unsafe fn try_init_surface(
 #[named]
 unsafe fn destroy_surface(dpy: *const c_void, surface: *const c_void) {
     debug!("{:?} {:?}", dpy, surface);
+    let handle = glhandle!(surface);
+    loop {
+        if let Some(ly_surface) = SURFACE_MAP.get(&handle) {
+            if let Some(context) = get_current_context(ly_surface.native) {
+                if ly_surface.context == context {
+                    break;
+                }
+                warn!("context changed: {:?} -> {:?}", ly_surface.context, context);
+            }
+        }
+        return;
+    }
     if let Some((_, _ly_surface)) = SURFACE_MAP.remove(&glhandle!(surface)) {
         // extra destroy work
     }
@@ -776,19 +835,62 @@ unsafe fn destroy_surface(dpy: *const c_void, surface: *const c_void) {
     }
 }
 
+#[named]
+unsafe fn destroy_context(dpy: *const c_void, ctx: *const c_void) {
+    debug!("destroying context {:?}", ctx);
+    let ctx = glhandle!(ctx);
+    let to_destroy = SURFACE_MAP
+        .iter()
+        .filter_map(|ly_surface| {
+            if ly_surface.context == ctx {
+                Some(*ly_surface.key())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    for surface in to_destroy {
+        destroy_surface(dpy, surface.as_ptr())
+    }
+}
+
+const DRM_FORMAT_R8: i32 = 0x20203852;
 const DRM_FORMAT_ABGR8888: i32 = 0x34324241;
 const DRM_FORMAT_XBGR8888: i32 = 0x34324258;
+const DRM_FORMAT_ABGR2101010: i32 = 0x30334241;
+const DRM_FORMAT_XBGR2101010: i32 = 0x30334258;
 
 unsafe fn egl_export_dmabuf(
     dpy: *const c_void,
-    _width: u32,
+    width: u32,
     height: u32,
     texture: u32,
 ) -> Result<(client::Format, u64, TextureImage, Vec<BufferPlaneInfo>)> {
-    let egl = egl();
+    let (gl, egl) = GL_EGL.as_ref().unwrap();
     if !(egl.ExportDMABUFImageQueryMESA.is_loaded() && egl.ExportDMABUFImageMESA.is_loaded()) {
         return Err(anyhow!("require EGL_MESA_image_dma_buf_export"));
     }
+
+    gl.BindTexture(gl_sys::TEXTURE_2D, texture);
+    // TODO: allows other compatible formats,
+    // how to determine format of current render buffers?
+    // glGetRenderbufferParameteriv of GL_RENDERBUFFER_INTERNAL_FORMAT
+    // glxQueryDrawable of GLX_TEXTURE_FORMAT_EXT
+    // eglQuerySurface of EGL_TEXTURE_FORMAT
+    // all returns receiver variable unmodified
+    //
+    // Possible solution: hook to all functions setting formats then recoding
+    gl.TexImage2D(
+        gl_sys::TEXTURE_2D,
+        0,
+        gl_sys::RGBA as _,
+        width as _,
+        height as _,
+        0,
+        gl_sys::RGBA,
+        gl_sys::UNSIGNED_BYTE,
+        ptr::null(),
+    );
     let image = if egl.CreateImage.is_loaded() {
         egl.CreateImageKHR(
             dpy,
@@ -846,9 +948,12 @@ unsafe fn egl_export_dmabuf(
             })
             .collect();
         let format = match fourcc {
+            DRM_FORMAT_R8 => client::Format::GRAY8,
             DRM_FORMAT_ABGR8888 => client::Format::RGBA,
             DRM_FORMAT_XBGR8888 => client::Format::RGBx,
-            _ => unimplemented!("unhandled fourcc {:#x}", fourcc),
+            DRM_FORMAT_ABGR2101010 => client::Format::ABGR_210LE,
+            DRM_FORMAT_XBGR2101010 => client::Format::xBGR_210LE,
+            _ => return Err(anyhow!("unhandled DRM format {:#x}", fourcc)),
         };
         return Ok((format, modifier, image, planes));
     };
@@ -885,7 +990,7 @@ unsafe fn glx_export_dmabuf(
         glx_sys::PIXMAP_BIT,
         glx_sys::BIND_TO_TEXTURE_TARGETS_EXT,
         glx_sys::TEXTURE_2D_BIT_EXT,
-        glx_sys::Y_INVERTED_EXT,
+        glx_sys::DONT_CARE,
         1,
         glx_sys::DOUBLEBUFFER,
         0,
@@ -923,7 +1028,12 @@ unsafe fn glx_export_dmabuf(
 
     let err = loop {
         gl.BindTexture(gl_sys::TEXTURE_2D, texture);
-        glx.BindTexImageEXT(dpy as _, glx_pixmap, glx_sys::FRONT_EXT as _, ptr::null());
+        glx.BindTexImageEXT(
+            dpy as _,
+            glx_pixmap,
+            glx_sys::FRONT_LEFT_EXT as _,
+            ptr::null(),
+        );
 
         let cookie = (x11.xcb_dri3_buffers_from_pixmap)(xcb_conn, x_pixmap as _);
         let reply = (x11.xcb_dri3_buffers_from_pixmap_reply)(xcb_conn, cookie, ptr::null_mut());
@@ -955,6 +1065,7 @@ unsafe fn glx_export_dmabuf(
             })
             .collect();
 
+        // XXX: why it's BGR instead of RGB?
         return Ok((client::Format::BGRA, reply.modifier, image, planes));
     };
 
@@ -985,17 +1096,6 @@ unsafe fn create_target_textures(
         .iter()
         .map(|&texture| -> Result<_> {
             gl.BindTexture(gl_sys::TEXTURE_2D, texture);
-            gl.TexImage2D(
-                gl_sys::TEXTURE_2D,
-                0,
-                gl_sys::RGBA as _,
-                width as _,
-                height as _,
-                0,
-                gl_sys::RGBA,
-                gl_sys::UNSIGNED_BYTE,
-                ptr::null(),
-            );
             gl.TexParameteri(
                 gl_sys::TEXTURE_2D,
                 gl_sys::TEXTURE_MIN_FILTER,

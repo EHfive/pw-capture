@@ -616,7 +616,6 @@ name = "pw-capture-gl"
 version = "0.0.1"
 dependencies = [
  "anyhow",
- "concat-idents",
  "dashmap",
  "elf",
  "function_name",

@@ -14,7 +14,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 anyhow = "1.0.68"
-concat-idents = "1.1.4"
 dashmap = "5.4.0"
 function_name = "0.3.0"
 once_cell = "1.17.0"
@@ -41,7 +40,6 @@ path = "../gl-sys"
 [dependencies.sentinel]
 version = "0.4.0"
 default-features = false
-features = ["alloc"]
 
 [features]
 default = []

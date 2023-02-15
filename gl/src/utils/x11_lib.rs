@@ -1,4 +1,4 @@
-use super::cstr;
+use super::{cstr, dlopen};
 
 use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
 use core::mem;
@@ -60,22 +60,6 @@ pub struct X11Lib {
 
     pub xcb_dri3_buffers_from_pixmap_offsets:
         unsafe extern "C" fn(reply: *const xcb_dri3_buffers_from_pixmap_reply_t) -> *mut u32,
-}
-
-unsafe fn dlopen(filenames: &[&CStr]) -> Option<*mut c_void> {
-    for filename in filenames {
-        let h = libc::dlopen(filename.as_ptr(), libc::RTLD_LAZY);
-        if !h.is_null() {
-            return Some(h);
-        }
-    }
-    if filenames.len() > 0 {
-        log::warn!(
-            "failed to load {}",
-            filenames[filenames.len() - 1].to_string_lossy()
-        );
-    }
-    None
 }
 
 impl X11Lib {

@@ -18,8 +18,8 @@ use anyhow::{anyhow, Result};
 use client::BufferPlaneInfo;
 use dashmap::DashMap;
 use function_name::named;
+use libc::RTLD_NEXT;
 use libc::{c_char, c_void};
-use libc::{RTLD_LAZY, RTLD_NEXT};
 use once_cell::sync::Lazy;
 use pw_capture_client as client;
 use pw_capture_gl_sys::prelude::*;
@@ -169,7 +169,7 @@ impl Drop for ExportTexture {
                     let x11 = X11_LIB.as_ref().unwrap();
                     glx.ReleaseTexImageEXT(
                         dpy as _,
-                        glx_pixmap.as_raw(),
+                        glx_pixmap.as_raw() as _,
                         glx_sys::FRONT_LEFT_EXT as _,
                     );
                     glx.DestroyPixmap(dpy as _, glx_pixmap.as_ptr::<c_void>() as _);
@@ -214,28 +214,20 @@ unsafe fn real_dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void 
 #[allow(non_camel_case_types)]
 type PFN_GetProcAddress = unsafe extern "C" fn(proc_name: *const c_char) -> *mut c_void;
 
-unsafe fn load_gpa(filename: &CStr, symbol: &CStr) -> Option<PFN_GetProcAddress> {
+unsafe fn load_gpa(filenames: &[&CStr], symbol: &CStr) -> Option<PFN_GetProcAddress> {
     Lazy::force(&GLOBAL_INIT);
     let res = loop {
         let gpa = real_dlsym(RTLD_NEXT, symbol.as_ptr());
         if !gpa.is_null() {
             break gpa;
         }
-        let handle = libc::dlopen(filename.as_ptr(), RTLD_LAZY);
-        if handle.is_null() {
-            log::warn!("failed to load {}", filename.to_string_lossy());
-            return None;
-        }
+        let handle = dlopen(filenames)?;
         let gpa = real_dlsym(handle, symbol.as_ptr());
         if !gpa.is_null() {
             break gpa;
         }
 
-        log::warn!(
-            "failed to load {} from {}",
-            symbol.to_string_lossy(),
-            filename.to_string_lossy()
-        );
+        log::warn!("failed to load {}", symbol.to_string_lossy());
         return None;
     };
     mem::transmute(res)
@@ -243,7 +235,10 @@ unsafe fn load_gpa(filename: &CStr, symbol: &CStr) -> Option<PFN_GetProcAddress>
 
 static GL_EGL: Lazy<Option<(Gl, Egl)>> = Lazy::new(|| unsafe {
     Lazy::force(&GLOBAL_INIT);
-    let gpa = load_gpa(cstr!(b"libEGL.so.1\0"), cstr!(b"eglGetProcAddress\0"))?;
+    let gpa = load_gpa(
+        &[cstr!(b"libEGL.so.1\0"), cstr!(b"libEGL.so")],
+        cstr!(b"eglGetProcAddress\0"),
+    )?;
     let gl = Gl::load_with(|name| {
         let name = CString::new(name).expect("invalid string");
         gpa(name.as_ptr())
@@ -257,7 +252,12 @@ static GL_EGL: Lazy<Option<(Gl, Egl)>> = Lazy::new(|| unsafe {
 
 static GL_GLX: Lazy<Option<(Gl, Glx)>> = Lazy::new(|| unsafe {
     Lazy::force(&GLOBAL_INIT);
-    let gpa = load_gpa(cstr!(b"libGL.so.1\0"), cstr!(b"glXGetProcAddress\0"))?;
+    let glx_files = &[cstr!(b"libGLX.so.0\0"), cstr!(b"libGLX.so")];
+    let gl_files = &[cstr!(b"libGL.so.1\0"), cstr!(b"libGL.so")];
+    let gpa = load_gpa(glx_files, cstr!(b"glXGetProcAddress\0"))
+        .or_else(|| load_gpa(gl_files, cstr!(b"glXGetProcAddress\0")))
+        .or_else(|| load_gpa(glx_files, cstr!(b"glXGetProcAddressARB\0")))
+        .or_else(|| load_gpa(gl_files, cstr!(b"glXGetProcAddressARB\0")))?;
     let gl = Gl::load_with(|name| {
         let name = CString::new(name).expect("invalid string");
         gpa(name.as_ptr())
@@ -779,6 +779,7 @@ unsafe fn try_init_surface(
         drop(ly_surface);
         stream.map(|s| s.proxy().try_terminate());
     }
+    SURFACE_MAP.remove(&handle);
 
     info!("{:?}: {}x{}", native, width, height);
 

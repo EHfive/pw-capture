@@ -18,8 +18,6 @@ use pw::properties;
 use pw::stream::ListenerBuilderT;
 use trait_enumizer::{crossbeam_class, enumizer};
 
-// allows 64 frames latency of buffer consuming
-const MAX_BUFFERS: usize = 64;
 // allows 4 frames latency of buffer processing
 const MAX_PROCESS_BUFFERS: usize = 4;
 
@@ -46,7 +44,7 @@ pub struct EnumFormatInfo {
 #[derive(Clone, Copy, Debug)]
 pub struct FixateFormat {
     pub modifier: Option<u64>,
-    pub planes: u32,
+    pub num_planes: u32,
 }
 
 #[derive(Educe)]
@@ -55,6 +53,7 @@ pub struct StreamInfo {
     pub width: u32,
     pub height: u32,
     pub enum_formats: Vec<EnumFormatInfo>,
+    pub max_buffers: u32,
     #[educe(Debug(ignore))]
     pub fixate_format: Box<dyn Fn(EnumFormatInfo) -> Option<FixateFormat> + Send>,
     #[educe(Debug(ignore))]
@@ -76,7 +75,7 @@ pub struct BufferPlaneInfo {
     pub fd: i64,
     pub offset: u32,
     pub size: u32,
-    pub stride: i32,
+    pub stride: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -91,7 +90,8 @@ pub struct BufferInfo {
 pub enum BufferUserHandle {
     #[cfg(feature = "ash")]
     VkImage(vk::Image),
-    Other(u64),
+    #[cfg(feature = "frontend_gl")]
+    Texture(u32),
 }
 
 #[derive(Default)]
@@ -104,6 +104,7 @@ struct StreamImplInner {
     #[allow(unused)]
     listener: Option<pw::stream::StreamListener<StreamData>>,
     enum_formats: Vec<EnumFormatInfo>,
+    max_buffers: u32,
     buffer_sender: Sender<BufferHandle>,
     on_terminate: Option<Box<dyn FnOnce()>>,
 }
@@ -113,7 +114,7 @@ pub(crate) struct StreamImpl {
     inner: Arc<RefCell<StreamImplInner>>,
 }
 
-pub(crate) fn build_stream_params(blocks: u32, is_dma_buf: bool) -> Vec<Vec<u8>> {
+pub(crate) fn build_stream_params(max_buffers: u32, blocks: u32, is_dma_buf: bool) -> Vec<Vec<u8>> {
     let data_type_flag = if is_dma_buf {
         1 << spa_sys::SPA_DATA_DmaBuf
     } else {
@@ -131,7 +132,7 @@ pub(crate) fn build_stream_params(blocks: u32, is_dma_buf: bool) -> Vec<Vec<u8>>
                     ChoiceEnum::Range {
                         default: 8,
                         min: 1,
-                        max: MAX_BUFFERS as _,
+                        max: max_buffers as _,
                     },
                 ))),
             },
@@ -391,7 +392,11 @@ unsafe fn on_param_changed(
         debug!("no modifier");
     }
 
-    let params = build_stream_params(fixate_info.planes, fixate_info.modifier.is_some());
+    let params = build_stream_params(
+        inner.max_buffers,
+        fixate_info.num_planes,
+        fixate_info.modifier.is_some(),
+    );
     let mut params = params
         .iter()
         .map(|p| p.as_ptr() as *const spa_sys::spa_pod)
@@ -545,6 +550,7 @@ impl StreamImpl {
             stream,
             listener: None,
             enum_formats: info.enum_formats,
+            max_buffers: info.max_buffers,
             buffer_sender,
             on_terminate: Some(on_terminate),
         };

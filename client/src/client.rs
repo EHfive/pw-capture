@@ -26,7 +26,7 @@ use trait_enumizer::{crossbeam_class, enumizer};
 )]
 pub trait ClientMethods {
     fn terminate(&self);
-    fn create_stream(&mut self, listener: StreamInfo) -> Result<Stream>;
+    fn create_stream(&mut self, info: StreamInfo) -> Result<Stream>;
 }
 
 #[derive(Clone)]

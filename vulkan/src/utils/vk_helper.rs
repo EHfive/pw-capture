@@ -130,7 +130,7 @@ pub unsafe fn create_target_image(
     width: u32,
     height: u32,
     modifier: u64,
-    planes: u32,
+    num_planes: u32,
 ) -> Result<(
     vk::Image,
     vk::DeviceMemory,
@@ -197,7 +197,7 @@ pub unsafe fn create_target_image(
     let dma_buf_fd = khr_memfd.get_memory_fd(&get_fd_info)?;
     // debug!("dma-buf fd: {}", dma_buf_fd);
 
-    let fds = (0..planes.clamp(1, 4))
+    let fds = (0..num_planes.clamp(1, 4))
         .map(|i| {
             let subresource = vk::ImageSubresource::builder()
                 .array_layer(0)

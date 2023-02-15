@@ -21,6 +21,8 @@ use function_name::named;
 use libc;
 use once_cell::sync::{Lazy, OnceCell};
 
+const MAX_BUFFERS: u32 = 128;
+
 struct LayerInstanceValid {
     // khr_surface: khr::Surface,
     khr_phy_props2: khr::GetPhysicalDeviceProperties2,
@@ -76,7 +78,7 @@ struct ExportData {
     command_pool: vk::CommandPool,
     command_buffers: Vec<vk::CommandBuffer>,
     modifier: Option<u64>,
-    planes: u32,
+    num_planes: u32,
 }
 
 struct LayerSwapchain {
@@ -630,7 +632,7 @@ unsafe fn on_fixate_format(
         ));
     }
 
-    let (modifier, planes) = if info.modifiers.len() > 0 {
+    let (modifier, num_planes) = if info.modifiers.len() > 0 {
         let modifiers = get_supported_modifiers(
             &ly_instance_valid.khr_phy_props2,
             ly_device.phy_device,
@@ -729,10 +731,13 @@ unsafe fn on_fixate_format(
         command_pool,
         command_buffers,
         modifier,
-        planes,
+        num_planes,
     });
 
-    Ok(client::FixateFormat { modifier, planes })
+    Ok(client::FixateFormat {
+        modifier,
+        num_planes,
+    })
 }
 
 #[named]
@@ -768,7 +773,7 @@ unsafe fn on_add_buffer(
             ly_swapchain.extent.width,
             ly_swapchain.extent.height,
             modifier,
-            export_data.planes,
+            export_data.num_planes,
         )?;
 
         let plane_size = fds[0].1.size;
@@ -986,6 +991,7 @@ unsafe fn create_stream(
         width,
         height,
         enum_formats,
+        max_buffers: MAX_BUFFERS,
         fixate_format: Box::new(move |format| {
             on_fixate_format(device, swapchain, format)
                 .map_err(|e| map_err!(e))

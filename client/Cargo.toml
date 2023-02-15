@@ -44,4 +44,4 @@ features = ["crossbeam-channel"]
 [features]
 default = []
 frontend_vulkan = ["ash"] # Vulkan image handle
-frontend_gl = []          # TODO, GL image handle
+frontend_gl = []          # GL texture handle

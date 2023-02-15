@@ -1,0 +1,14 @@
+[package]
+name = "pw-capture-gl-sys"
+description = "PW Capture OpenGL GLX/EGL bindings"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.64.0"
+authors = ["Huang-Huang Bao <i@eh5.me>"]
+homepage = "https://github.com/EHfive/pw-capture"
+repository = "https://github.com/EHfive/pw-capture"
+license = "MIT"
+build = "build.rs"
+
+[build-dependencies]
+gl_generator = "0.14.0"

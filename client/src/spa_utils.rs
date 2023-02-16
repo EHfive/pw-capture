@@ -1,9 +1,9 @@
 use crate::Format;
 
-pub use libspa as spa;
-pub use libspa_sys as spa_sys;
-pub use spa::pod::*;
-pub use spa::utils::*;
+pub(crate) use libspa as spa;
+pub(crate) use libspa_sys as spa_sys;
+pub(crate) use spa::pod::*;
+pub(crate) use spa::utils::*;
 
 use core::mem;
 use core::ptr;

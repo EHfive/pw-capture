@@ -1,7 +1,5 @@
 use num_enum::{FromPrimitive, IntoPrimitive};
 
-pub struct FormatDescriptor(pub Format, pub Transfer);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, IntoPrimitive, FromPrimitive)]
 #[allow(non_camel_case_types)]
 #[repr(u32)]

@@ -16,7 +16,7 @@ dashmap = "5.4.0"
 escher = { version = "0.3.0", git = "https://github.com/petrosagg/escher" }
 libspa = { git = "https://gitlab.freedesktop.org/eh5/pipewire-rs", branch = "pw-capture" }
 libspa-sys = { git = "https://gitlab.freedesktop.org/eh5/pipewire-rs", branch = "pw-capture" }
-log = "*"
+log = "0.4.17"
 num_enum = "0.5.9"
 pipewire = { git = "https://gitlab.freedesktop.org/eh5/pipewire-rs", branch = "pw-capture", features = [
     "v0_3_41",

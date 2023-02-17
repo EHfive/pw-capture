@@ -487,7 +487,7 @@ fn get_pts_nanos() -> i64 {
     unsafe {
         libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
     }
-    (ts.tv_sec * 1_000_000_000 + ts.tv_nsec) as i64
+    ts.tv_sec as i64 * 1_000_000_000 + ts.tv_nsec as i64
 }
 
 unsafe fn on_process_buffer(

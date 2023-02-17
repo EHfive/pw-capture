@@ -4,8 +4,11 @@ use core::ffi::{c_int, c_uint, c_ulong, c_void, CStr};
 use core::mem;
 use std::ffi::CString;
 
+#[repr(C)]
 #[allow(non_camel_case_types)]
-pub type xcb_dri3_buffers_from_pixmap_cookie_t = c_uint;
+pub struct xcb_dri3_buffers_from_pixmap_cookie_t {
+    pub sequence: c_uint,
+}
 #[allow(non_camel_case_types)]
 pub type xcb_pixmap_t = u32;
 

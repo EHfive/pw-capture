@@ -7,7 +7,7 @@ rust-version = "1.64.0"
 authors = ["Huang-Huang Bao <i@eh5.me>"]
 homepage = "https://github.com/EHfive/pw-capture"
 repository = "https://github.com/EHfive/pw-capture"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 
 [lib]
 crate-type = ["cdylib"]

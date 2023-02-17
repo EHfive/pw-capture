@@ -1,0 +1,14 @@
+#!/bin/sh
+
+if [ "$#" -eq 0 ]; then
+	programname=$(basename "$0")
+	echo "ERROR: No program supplied"
+	echo
+	echo "Usage: $programname <program>"
+	exit 1
+fi
+
+LD_PRELOAD="${LD_PRELOAD}${LD_PRELOAD:+:}@GL_LIB_NAME@"
+LD_LIBRARY_PATH="${LD_LIBRARY_PATH}${LD_LIBRARY_PATH:+:}@GL_LIB_DIR@"
+
+exec env ENABLE_PW_CAPTURE=1 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" LD_PRELOAD="${LD_PRELOAD}" "$@"

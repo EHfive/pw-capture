@@ -30,7 +30,7 @@ default-features = false
 
 [dependencies.log]
 version = "0.4.17"
-features = ["std", "release_max_level_trace"]
+features = ["std", "release_max_level_info"]
 
 [dependencies.pw-capture-client]
 path = "../client"

@@ -1,0 +1,15 @@
+option (
+  'profile',
+  description: 'Cargo build profile',
+  type: 'combo',
+  choices: [
+    'dev',
+    'release'
+  ],
+  value: 'dev'
+)
+option (
+  'target',
+  description: 'Custom Rust target, e.g. i686-unknown-linux-gnu',
+  type: 'string',
+)

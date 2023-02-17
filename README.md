@@ -14,7 +14,14 @@ Inspired by [obs-vkcapture](https://github.com/nowrep/obs-vkcapture).
 
 ### Install
 
-We have set up a meson script to make installation more *unix idiomatic, you could instead follow [Development](#development).
+| Repo       | Package                                                                         |
+| ---------- | ------------------------------------------------------------------------------- |
+| AUR (Arch) | [pw-capture-git](https://aur.archlinux.org/packages/pw-capture-git)             |
+|            | [lib32-pw-capture-git](https://aur.archlinux.org/packages/lib32-pw-capture-git) |
+
+#### Manually Install
+
+We have set up a meson script to make installation more \*unix idiomatic, you could instead follow [Development](#development).
 
 ```
 meson setup builddir --prefix /usr -Dprofile=release
@@ -25,6 +32,7 @@ sudo cp -r builddir/destdir/usr/. /usr
 ```
 
 Optionally, build layers for 32-bit:
+
 ```
 export PKG_CONFIG=i686-pc-linux-gnu-pkg-config
 meson setup builddir32 --prefix /usr --libdir lib32 \
@@ -35,6 +43,7 @@ sudo cp -r builddir32/destdir/usr/lib32/. /usr/lib32
 ```
 
 Now just launches Vulkan/OpenGL apps with `pw-capture` wrapper,
+
 ```
 pw-capture vkcube
 # X11

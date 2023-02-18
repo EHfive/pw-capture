@@ -6,6 +6,14 @@ use core::ffi::{c_void, CStr};
 pub use logger::*;
 pub use x11_lib::*;
 
+#[cfg(debug_assertions)]
+#[macro_export]
+macro_rules! cstr {
+    ($bytes:expr) => {
+        ::core::ffi::CStr::from_bytes_with_nul($bytes).unwrap()
+    };
+}
+#[cfg(not(debug_assertions))]
 #[macro_export]
 macro_rules! cstr {
     ($bytes:expr) => {

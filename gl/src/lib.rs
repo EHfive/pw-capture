@@ -236,7 +236,7 @@ unsafe fn load_gpa(filenames: &[&CStr], symbol: &CStr) -> Option<PFN_GetProcAddr
 static GL_EGL: Lazy<Option<(Gl, Egl)>> = Lazy::new(|| unsafe {
     Lazy::force(&GLOBAL_INIT);
     let gpa = load_gpa(
-        &[cstr!(b"libEGL.so.1\0"), cstr!(b"libEGL.so")],
+        &[cstr!(b"libEGL.so.1\0"), cstr!(b"libEGL.so\0")],
         cstr!(b"eglGetProcAddress\0"),
     )?;
     let gl = Gl::load_with(|name| {
@@ -252,8 +252,8 @@ static GL_EGL: Lazy<Option<(Gl, Egl)>> = Lazy::new(|| unsafe {
 
 static GL_GLX: Lazy<Option<(Gl, Glx)>> = Lazy::new(|| unsafe {
     Lazy::force(&GLOBAL_INIT);
-    let glx_files = &[cstr!(b"libGLX.so.0\0"), cstr!(b"libGLX.so")];
-    let gl_files = &[cstr!(b"libGL.so.1\0"), cstr!(b"libGL.so")];
+    let glx_files = &[cstr!(b"libGLX.so.0\0"), cstr!(b"libGLX.so\0")];
+    let gl_files = &[cstr!(b"libGL.so.1\0"), cstr!(b"libGL.so\0")];
     let gpa = load_gpa(glx_files, cstr!(b"glXGetProcAddress\0"))
         .or_else(|| load_gpa(gl_files, cstr!(b"glXGetProcAddress\0")))
         .or_else(|| load_gpa(glx_files, cstr!(b"glXGetProcAddressARB\0")))
@@ -1049,6 +1049,7 @@ unsafe fn glx_export_dmabuf(
         let fds = slice::from_raw_parts(fds, reply.nfd as _);
         let strides = slice::from_raw_parts(strides, reply.nfd as _);
         let offsets = slice::from_raw_parts(offsets, reply.nfd as _);
+        let modifier = reply.modifier;
 
         let image = TextureImage::Pixmap {
             glx_pixmap: GlHandle::from_raw(glx_pixmap as _),
@@ -1066,8 +1067,11 @@ unsafe fn glx_export_dmabuf(
             })
             .collect();
 
+        libc::free(reply as *mut _ as _);
+        drop(reply);
+
         // XXX: why it's BGR instead of RGB?
-        return Ok((client::Format::BGRA, reply.modifier, image, planes));
+        return Ok((client::Format::BGRA, modifier, image, planes));
     };
 
     glx.DestroyPixmap(dpy as _, glx_pixmap);

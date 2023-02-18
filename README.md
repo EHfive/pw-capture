@@ -1,6 +1,29 @@
 # pw-capture
 
-Vulkan/OpenGL layer that captures display images to PipeWire server and allows consuming from other clients (e.g. GStreamer).
+Vulkan/OpenGL layer that captures render images to PipeWire server.
+
+```mermaid
+flowchart LR
+    subgraph pw-capture Layer
+        subgraph src_app[Vulkan/OpenGL App/Game]
+            src_frame(frame to be present)
+        end
+        src_frame -->|copy & export| src_buf[(DMA-BUF fd 0..n)] <==> src_queue
+        subgraph src_client[PipeWire Client]
+            src_queue[(buffer queue)]
+        end
+    end
+
+    gst[gst-launch-1.0 pipewiresrc ! ..]
+    other[Other PipeWire video sinks/clients]
+
+    src_client -.-> link1 -.-> gst
+    src_client -.-> link2 -.-> other
+    subgraph server[PipeWire Server]
+        link1{{Link}}
+        link2{{Link}}
+    end
+```
 
 | Crate                          |                                                                                           |
 | ------------------------------ | ----------------------------------------------------------------------------------------- |
@@ -11,6 +34,40 @@ Vulkan/OpenGL layer that captures display images to PipeWire server and allows c
 Inspired by [obs-vkcapture](https://github.com/nowrep/obs-vkcapture).
 
 ## Usage
+
+Just launch Vulkan/OpenGL apps with `pw-capture` wrapper, the capture node would now registered on PipeWire graph and waiting for connection from sink nodes.
+
+```bash
+pw-capture vkcube
+# X11
+pw-capture glxgears
+pw-capture eglgears_x11
+pw-capture glxgears32
+# Wayland
+pw-capture eglgears_wayland
+# Wine apps using DXVK
+pw-capture wine some_game.exe
+```
+
+Or for OpenGL app:
+
+```bash
+# `$LIB` is a dynamic string tokens of ld.so and would
+# expands to `lib64` or `lib32` depending on the architecture
+env LD_LIBRARY_PATH="/usr/\$LIB" \
+    LD_PRELOAD=libpw-capture-gl.so \
+    glxgears
+```
+
+for Vulkan app:
+
+```bash
+ENABLE_PW_CAPTURE=1 vkcube
+```
+
+`pw-capture` script is just a combination of two above.
+
+**Note**: use `pw-dump` to inspect the node info and use tools like [pw-viz](https://github.com/Ax9D/pw-viz) or [qpwgraph](https://gitlab.freedesktop.org/rncbc/qpwgraph) to view the node in graph.
 
 ### Install
 
@@ -23,7 +80,7 @@ Inspired by [obs-vkcapture](https://github.com/nowrep/obs-vkcapture).
 
 We have set up a meson script to make installation more \*unix idiomatic, you could instead follow [Development](#development).
 
-```
+```bash
 meson setup builddir --prefix /usr -Dprofile=release
 # avoid running cargo in root
 meson install -C builddir --destdir destdir
@@ -42,23 +99,11 @@ tree builddir32/destdir
 sudo cp -r builddir32/destdir/usr/lib32/. /usr/lib32
 ```
 
-Now just launches Vulkan/OpenGL apps with `pw-capture` wrapper,
-
-```
-pw-capture vkcube
-# X11
-pw-capture glxgears
-pw-capture eglgears_x11
-pw-capture glxgears32
-# Wayland
-pw-capture eglgears_wayland
-```
-
 ### Pipe image datas to GStreamer
 
 With latest PipeWire(at least 0.3.66) gst plugins installed, you can pipe the node to other sinks with `pipewiresrc`. Currently it only supports `video/x-raw(memory:DMABuf)`, so you would have to use `gl*` plugins as intermediary.
 
-```
+```bash
 # find the node `target-object` with command below
 gst-device-monitor-1.0 Video/Source
 # or use jq to filter "object.serial" property
@@ -121,20 +166,20 @@ stat ./target/debug/libpw_capture_vk.so
 
 Then add layer [manifest](./vulkan/layer.json) to Vulkan loader lookup path and enable it, you can just source the [.envrc](./vulkan/.envrc) file.
 
-```
+```bash
 source ./vulkan/.envrc
 vulkaninfo | grep pwcapture
 ```
 
 Now the layer would be loaded by Vulkan loader when Vulkan app launches. We would use `vkcube` (in `vulkan-tools`) here. You would see layer logs if it successfully loaded.
 
-```
+```bash
 vkcube
 ```
 
 You can also find info of the layer created node with `pw-dump`.
 
-```
+```bash
 pw-dump | jq '.[] | select(.info.props."media.software" == "pw-capture")'
 ```
 

@@ -64,11 +64,27 @@ pub struct StreamInfo {
     pub process_buffer: Box<dyn Fn(BufferUserHandle) + Send>,
 }
 
-#[derive(Clone, Copy, Hash, Debug)]
-pub struct BufferHandle {
-    pub(crate) ptr: ptr::NonNull<pw::sys::pw_buffer>,
+mod buffer_handle {
+    use super::*;
+    use core::num::NonZeroUsize;
+
+    #[derive(Clone, Copy, Hash, Debug)]
+    pub struct BufferHandle(NonZeroUsize);
+
+    impl From<ptr::NonNull<pw::sys::pw_buffer>> for BufferHandle {
+        fn from(value: ptr::NonNull<pw::sys::pw_buffer>) -> Self {
+            let non_zero = unsafe { NonZeroUsize::new_unchecked(value.as_ptr() as usize) };
+            Self(non_zero)
+        }
+    }
+
+    impl From<BufferHandle> for ptr::NonNull<pw::sys::pw_buffer> {
+        fn from(value: BufferHandle) -> Self {
+            unsafe { ptr::NonNull::new_unchecked(value.0.get() as *mut pw::sys::pw_buffer) }
+        }
+    }
 }
-unsafe impl Send for BufferHandle {}
+pub use buffer_handle::*;
 
 #[derive(Clone, Copy, Debug)]
 pub struct BufferPlaneInfo {
@@ -293,7 +309,7 @@ impl StreamMethods for StreamImpl {
                 stream.queue_raw_buffer(buffer.as_ptr());
                 return None;
             };
-            Some((BufferHandle { ptr: buffer }, *user_data))
+            Some((buffer.into(), *user_data))
         }
     }
 
@@ -496,7 +512,7 @@ unsafe fn on_process_buffer(
     seq: u64,
     user_process: &Box<dyn Fn(BufferUserHandle) + Send>,
 ) {
-    let pw_buffer = &mut *buffer.ptr.as_ptr();
+    let pw_buffer = ptr::NonNull::from(buffer).as_mut();
 
     let header = spa_buffer_find_meta_data::<libspa_sys::spa_meta_header>(
         pw_buffer.buffer,
@@ -522,7 +538,7 @@ unsafe fn on_process_buffer(
     }
     pw_buffer.size = 1;
 
-    stream.queue_raw_buffer(buffer.ptr.as_ptr());
+    stream.queue_raw_buffer(pw_buffer);
 }
 
 impl StreamImpl {

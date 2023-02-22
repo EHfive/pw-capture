@@ -1,0 +1,28 @@
+[package]
+name = "pw-capture-cursor"
+description = "X11/Wayland local cursor query library"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.64.0"
+authors = ["Huang-Huang Bao <i@eh5.me>"]
+homepage = "https://github.com/EHfive/pw-capture"
+repository = "https://github.com/EHfive/pw-capture"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = "1.0.69"
+libc = "0.2.139"
+once_cell = "1.17.1"
+
+[dependencies.pw-capture-client]
+path = "../client"
+optional = true
+
+[dependencies.xcb-dl]
+version = "0.2.0"
+features = ["xcb_xfixes", "xcb_xfixes_types"]
+git = "https://github.com/EHfive/xcb-dl"
+branch = "fix-extern-c"
+
+[features]
+default = ["pw-capture-client"]

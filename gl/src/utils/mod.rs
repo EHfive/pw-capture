@@ -1,8 +1,10 @@
+mod egl;
 mod logger;
 mod x11_lib;
 
 use core::ffi::{c_void, CStr};
 
+pub use egl::*;
 pub use logger::*;
 pub use x11_lib::*;
 

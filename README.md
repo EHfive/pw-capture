@@ -35,7 +35,7 @@ Inspired by [obs-vkcapture](https://github.com/nowrep/obs-vkcapture).
 
 ## Usage
 
-Just launch Vulkan/OpenGL apps with `pw-capture` wrapper, the capture node would now registered on PipeWire graph and waiting for connection from sink nodes.
+Just launch Vulkan/OpenGL apps with `pw-capture` wrapper, the capture node would now registered on PipeWire graph and waiting for connection from sink nodes (see section [Pipe image datas to GStreamer](#pipe-image-datas-to-gstreamer)).
 
 ```bash
 pw-capture vkcube
@@ -143,11 +143,12 @@ gst-launch-1.0 -e pipewiresrc target-object=999 min-buffers=64 \
 
 - [x] Installation script
 - [x] OpenGL support
+- [x] Passing cursor position & bitmap in buffer meta (X11)
+- [ ] Wayland cursor capture (by intercepting libwayland-client)
 - [ ] Support export image that maps or copies to memfd as fallback of DMA-BUF export
 - [ ] Add more control options (via env vars or config file)
 - [ ] Support color conversion to common YUV formats with render pipeline
 - [ ] Renegotiate stream format on Vulkan swapchain recreation
-- [ ] Passing cursor position in buffer meta
 - [ ] Better handling of node description & Wine application node name
 - [ ] Allows single buffer display mode
 - [ ] Saner error handling, make sure dangling resources are freed before return

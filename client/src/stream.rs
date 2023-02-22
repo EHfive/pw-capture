@@ -20,6 +20,9 @@ use trait_enumizer::{crossbeam_class, enumizer};
 
 // allows 4 frames latency of buffer processing
 const MAX_PROCESS_BUFFERS: usize = 4;
+const MAX_CURSOR_WIDTH: usize = 64;
+const MAX_CURSOR_BPP: usize = 4;
+const MAX_CURSOR_BITMAP_SIZE: usize = MAX_CURSOR_WIDTH * MAX_CURSOR_WIDTH * MAX_CURSOR_BPP;
 
 #[enumizer(
     name=StreamMessage,
@@ -47,6 +50,12 @@ pub struct FixateFormat {
     pub num_planes: u32,
 }
 
+pub struct AddBufferMetaCbs<'a> {
+    pub add_cursor: Option<Box<dyn FnOnce(BufferCursorInfo) + 'a>>,
+}
+
+type ProcessBufferCb = Box<dyn Fn(BufferUserHandle, AddBufferMetaCbs) + Send>;
+
 #[derive(Educe)]
 #[educe(Debug)]
 pub struct StreamInfo {
@@ -61,7 +70,7 @@ pub struct StreamInfo {
     #[educe(Debug(ignore))]
     pub remove_buffer: Box<dyn Fn(BufferUserHandle) + Send>,
     #[educe(Debug(ignore))]
-    pub process_buffer: Box<dyn Fn(BufferUserHandle) + Send>,
+    pub process_buffer: ProcessBufferCb,
 }
 
 mod buffer_handle {
@@ -110,9 +119,27 @@ pub enum BufferUserHandle {
     Texture(u32),
 }
 
+#[derive(Clone, Debug)]
+pub struct BufferBitmap<'a> {
+    pub width: u32,
+    pub height: u32,
+    pub format: Format,
+    pub pixels: &'a [u8],
+}
+
+#[derive(Clone, Debug)]
+pub struct BufferCursorInfo<'a> {
+    /// change the internal cursor id if `true`
+    pub serial: bool,
+    pub position: Point,
+    pub hotspot: Point,
+    pub bitmap: Option<BufferBitmap<'a>>,
+}
+
 #[derive(Default)]
 struct StreamData {
     seq: u64,
+    cursor_id: u32,
 }
 
 struct StreamImplInner {
@@ -188,7 +215,28 @@ pub(crate) fn build_stream_params(max_buffers: u32, blocks: u32, is_dma_buf: boo
         ],
     });
 
-    let params = &[buffers, meta_header];
+    let cursor_meta_size = mem::size_of::<spa_sys::spa_meta_cursor>()
+        + mem::size_of::<spa_sys::spa_meta_bitmap>()
+        + MAX_CURSOR_BITMAP_SIZE;
+
+    let meta_cursor = Value::Object(Object {
+        type_: spa_sys::SPA_TYPE_OBJECT_ParamMeta,
+        id: spa_sys::SPA_PARAM_Meta,
+        properties: vec![
+            Property {
+                key: spa_sys::SPA_PARAM_META_type,
+                flags: PropertyFlags::empty(),
+                value: Value::Id(Id(spa_sys::SPA_META_Cursor)),
+            },
+            Property {
+                key: spa_sys::SPA_PARAM_META_size,
+                flags: PropertyFlags::empty(),
+                value: Value::Int(cursor_meta_size as _),
+            },
+        ],
+    });
+
+    let params = &[buffers, meta_header, meta_cursor];
     params
         .iter()
         .map(|value| -> Result<Vec<u8>> { spa_pod_serialize(value) })
@@ -506,11 +554,62 @@ fn get_pts_nanos() -> i64 {
     ts.tv_sec as i64 * 1_000_000_000 + ts.tv_nsec as i64
 }
 
+unsafe fn fill_cursor_meta(
+    id: &mut u32,
+    cursor_ptr: *mut libspa_sys::spa_meta_cursor,
+    cursor_info: Option<BufferCursorInfo>,
+) {
+    debug_assert!(!cursor_ptr.is_null());
+    let cursor = &mut *cursor_ptr;
+    if let Some(info) = cursor_info {
+        if info.serial {
+            *id += 1;
+        }
+        cursor.id = *id;
+        cursor.flags = 0;
+        cursor.position = info.position.into();
+        cursor.hotspot = info.hotspot.into();
+
+        if let Some(b_info) = info.bitmap {
+            let offset = mem::size_of::<spa_sys::spa_meta_cursor>();
+            cursor.bitmap_offset = offset as _;
+            let bitmap_ptr = cursor_ptr
+                .cast::<u8>()
+                .offset(offset as _)
+                .cast::<spa_sys::spa_meta_bitmap>();
+            let bitmap = &mut *bitmap_ptr;
+            bitmap.format = b_info.format.into();
+            bitmap.size.width = b_info.width;
+            bitmap.size.height = b_info.height;
+            bitmap.stride = b_info.width as _;
+            let offset = mem::size_of::<spa_sys::spa_meta_bitmap>();
+            bitmap.offset = offset as _;
+            let bitmap_data = bitmap_ptr.cast::<u8>().offset(offset as _);
+
+            if b_info.pixels.len() <= MAX_CURSOR_BITMAP_SIZE {
+                let bitmap_data = slice::from_raw_parts_mut(bitmap_data, b_info.pixels.len());
+                bitmap_data.copy_from_slice(&b_info.pixels);
+            } else {
+                warn!(
+                    "cursor bitmap size {} exceed max size {}, discarded",
+                    b_info.pixels.len(),
+                    MAX_CURSOR_BITMAP_SIZE
+                );
+                cursor.bitmap_offset = 0;
+            }
+        } else {
+            cursor.bitmap_offset = 0;
+        }
+    } else {
+        cursor.id = 0;
+    }
+}
+
 unsafe fn on_process_buffer(
     stream: &pw::stream::Stream<StreamData>,
+    data: &mut StreamData,
     buffer: BufferHandle,
-    seq: u64,
-    user_process: &Box<dyn Fn(BufferUserHandle) + Send>,
+    user_process: &ProcessBufferCb,
 ) {
     let pw_buffer = ptr::NonNull::from(buffer).as_mut();
 
@@ -519,13 +618,31 @@ unsafe fn on_process_buffer(
         libspa_sys::SPA_META_Header,
     );
 
+    let cursor = spa_buffer_find_meta_data::<libspa_sys::spa_meta_cursor>(
+        pw_buffer.buffer,
+        libspa_sys::SPA_META_Cursor,
+    );
+
     let user_data = pw_buffer.user_data as *mut BufferUserHandle;
     if user_data.is_null() {
         error!("buffer broken no user data");
         return;
     };
 
-    user_process(*user_data);
+    let mut cursor_meta_filled = false;
+    user_process(
+        *user_data,
+        AddBufferMetaCbs {
+            add_cursor: if cursor.is_null() {
+                None
+            } else {
+                Some(Box::new(|info| {
+                    fill_cursor_meta(&mut data.cursor_id, cursor, Some(info));
+                    cursor_meta_filled = true;
+                }))
+            },
+        },
+    );
 
     if !header.is_null() {
         let header = &mut *header;
@@ -533,9 +650,15 @@ unsafe fn on_process_buffer(
         header.pts = get_pts_nanos();
         // header.pts = -1;
         header.offset = 0;
-        header.seq = seq;
+        header.seq = data.seq;
         header.dts_offset = 0;
     }
+    data.seq += 1;
+
+    if !cursor.is_null() && !cursor_meta_filled {
+        fill_cursor_meta(&mut data.cursor_id, cursor, None);
+    }
+
     pw_buffer.size = 1;
 
     stream.queue_raw_buffer(pw_buffer);
@@ -578,7 +701,10 @@ impl StreamImpl {
             .inner
             .borrow_mut()
             .stream
-            .add_local_listener_with_user_data(StreamData { seq: 0 })
+            .add_local_listener_with_user_data(StreamData {
+                seq: 0,
+                cursor_id: 1,
+            })
             .state_changed({
                 let stream_impl = stream_impl.clone();
                 let buffer_receiver = buffer_receiver.clone();
@@ -613,8 +739,7 @@ impl StreamImpl {
             .remove_buffer(move |buffer| unsafe { on_remove_buffer(buffer, &info.remove_buffer) })
             .process(move |stream, data| unsafe {
                 if let Ok(buffer) = buffer_receiver.try_recv() {
-                    on_process_buffer(stream, buffer, data.seq, &info.process_buffer);
-                    data.seq += 1;
+                    on_process_buffer(stream, data, buffer, &info.process_buffer);
                 } else {
                     warn!("unscheduled process call");
                 }

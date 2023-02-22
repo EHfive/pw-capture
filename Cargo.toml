@@ -1,5 +1,5 @@
 [workspace]
-members = ["client", "gl", "gl-sys", "vulkan"]
+members = ["client", "gl", "gl-sys", "vulkan", "cursor"]
 
 [profile.release]
 strip = true

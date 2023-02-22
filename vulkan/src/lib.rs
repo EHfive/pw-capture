@@ -1,13 +1,16 @@
 mod utils;
 use utils::*;
 
+use local_cursor::CursorManager;
 use pw_capture_client as client;
+use pw_capture_cursor as local_cursor;
 
 use core::ffi::{c_char, CStr};
 use core::mem;
 use core::ptr;
 use core::result::Result::{Err, Ok};
 use core::slice;
+use core::sync::atomic::{self, AtomicU64};
 use std::collections::HashSet;
 use std::ffi::CString;
 use std::time::Instant;
@@ -24,13 +27,15 @@ use once_cell::sync::{Lazy, OnceCell};
 const MAX_BUFFERS: u32 = 128;
 
 struct LayerInstanceValid {
-    // khr_surface: khr::Surface,
     khr_phy_props2: khr::GetPhysicalDeviceProperties2,
 }
 
 struct LayerInstance {
     ash_instance: ash::Instance,
-    #[allow(unused)]
+    khr_surface: khr::Surface,
+    xlib_surface: khr::XlibSurface,
+    xcb_surface: khr::XcbSurface,
+    wayland_surface: khr::WaylandSurface,
     valid: Option<LayerInstanceValid>,
 }
 
@@ -54,6 +59,12 @@ struct LayerQueue {
     family_index: u32,
     family_props: vk::QueueFamilyProperties,
     index: u32,
+}
+
+struct LayerSurface {
+    #[allow(unused)]
+    instance: vk::Instance,
+    cursor_manager: Option<Box<dyn CursorManager + Send + Sync>>,
 }
 
 struct ImageData {
@@ -93,6 +104,7 @@ struct LayerSwapchain {
     image_datas: DashMap<vk::Image, ImageData>,
     export_images: DashMap<vk::Image, ExportImage>,
     export_data: Option<ExportData>,
+    cursor_serial: AtomicU64,
 }
 
 static LOGGING: Lazy<()> = Lazy::new(|| init_logger());
@@ -114,6 +126,7 @@ static GDPA_MAP: Lazy<DashMap<vk::Device, vk::PFN_vkGetDeviceProcAddr>> =
     Lazy::new(|| DashMap::new());
 static DEVICE_MAP: Lazy<DashMap<vk::Device, LayerDevice>> = Lazy::new(|| DashMap::new());
 static QUEUE_MAP: Lazy<DashMap<vk::Queue, LayerQueue>> = Lazy::new(|| DashMap::new());
+static SURFACE_MAP: Lazy<DashMap<vk::SurfaceKHR, LayerSurface>> = Lazy::new(|| DashMap::new());
 static SWAPCHAIN_MAP: Lazy<DashMap<vk::SwapchainKHR, LayerSwapchain>> =
     Lazy::new(|| DashMap::new());
 
@@ -181,15 +194,36 @@ unsafe extern "system" fn pwcap_vkGetInstanceProcAddr(
             _ => break,
         };
         debug!(
-            target: function_name!(),
             "intercept instance function {} {:?}",
             name.to_string_lossy(),
             pfn,
         );
         return mem::transmute(pfn);
     }
+
     let gipa = GIPA.get()?;
-    gipa(instance, p_name)
+    let res = gipa(instance, p_name);
+    if res.is_none() {
+        // for extension command, return NULL if next layer does not support given command
+        return None;
+    }
+
+    loop {
+        let pfn: *const () = match name.to_bytes() {
+            b"vkCreateXlibSurfaceKHR" => pwcap_vkCreateXlibSurfaceKHR as _,
+            b"vkCreateXcbSurfaceKHR" => pwcap_vkCreateXcbSurfaceKHR as _,
+            b"vkCreateWaylandSurfaceKHR" => pwcap_vkCreateWaylandSurfaceKHR as _,
+            b"vkDestroySurfaceKHR" => pwcap_vkDestroySurfaceKHR as _,
+            _ => break,
+        };
+        debug!(
+            "intercept instance function {} {:?}",
+            name.to_string_lossy().as_ref(),
+            pfn
+        );
+        return mem::transmute(pfn);
+    }
+    res
 }
 const _: vk::PFN_vkGetInstanceProcAddr = pwcap_vkGetInstanceProcAddr;
 
@@ -208,8 +242,7 @@ unsafe extern "system" fn pwcap_vkGetDeviceProcAddr(
             _ => break,
         };
         debug!(
-            target: function_name!(),
-            "intercept instance function {} {:?}",
+            "intercept device function {} {:?}",
             name.to_string_lossy(),
             pfn,
         );
@@ -233,7 +266,6 @@ unsafe extern "system" fn pwcap_vkGetDeviceProcAddr(
             _ => break,
         };
         debug!(
-            target: "pwcap_vkGetDeviceProcAddr",
             "intercept device function {} {:?}",
             name.to_string_lossy().as_ref(),
             pfn
@@ -332,20 +364,25 @@ unsafe extern "system" fn pwcap_vkCreateInstance(
     }
 
     let valid = if valid {
-        // let khr_surface = khr::Surface::new(&entry, &ash_instance);
         let khr_phy_props2 = khr::GetPhysicalDeviceProperties2::new(&entry, &ash_instance);
-        Some(LayerInstanceValid {
-            // khr_surface,
-            khr_phy_props2,
-        })
+        Some(LayerInstanceValid { khr_phy_props2 })
     } else {
         None
     };
+
+    let khr_surface = khr::Surface::new(&entry, &ash_instance);
+    let xlib_surface = khr::XlibSurface::new(&entry, &ash_instance);
+    let xcb_surface = khr::XcbSurface::new(&entry, &ash_instance);
+    let wayland_surface = khr::WaylandSurface::new(&entry, &ash_instance);
 
     INSTANCE_MAP.insert(
         instance,
         LayerInstance {
             ash_instance,
+            khr_surface,
+            xlib_surface,
+            xcb_surface,
+            wayland_surface,
             valid,
         },
     );
@@ -605,6 +642,172 @@ unsafe extern "system" fn dispatch_next_vkGetDeviceProcAddr(
 const _: vk::PFN_vkGetDeviceProcAddr = dispatch_next_vkGetDeviceProcAddr;
 
 #[named]
+unsafe fn init_surface(
+    instance: vk::Instance,
+    surface: vk::SurfaceKHR,
+    raw_handle: SurfaceRawHandle,
+) {
+    debug!("create surface: {:?} raw_handle: {:?}", surface, raw_handle);
+    let cursor_manager: Option<Box<dyn CursorManager + Send + Sync>> = loop {
+        match raw_handle {
+            SurfaceRawHandle::Xlib { dpy: _, window } => {
+                let m = local_cursor::XcbWindow::new_connection(window as _);
+                match m {
+                    Ok(m) => break Some(Box::new(m)),
+                    Err(e) => {
+                        warn!("failed to create xcb cursor manager {e:?}");
+                    }
+                }
+            }
+            SurfaceRawHandle::Xcb {
+                connection: _,
+                window,
+            } => {
+                let m = local_cursor::XcbWindow::new_connection(window);
+                match m {
+                    Ok(m) => break Some(Box::new(m)),
+                    Err(e) => {
+                        warn!("failed to create xcb cursor manager {e:?}");
+                    }
+                }
+            }
+            SurfaceRawHandle::Wayland {
+                display: _,
+                surface: _,
+            } => {
+                // TODO
+            }
+        };
+        break None;
+    };
+    let ly_surface = LayerSurface {
+        instance,
+        cursor_manager,
+    };
+    SURFACE_MAP.insert(surface, ly_surface);
+}
+
+#[no_mangle]
+unsafe extern "system" fn pwcap_vkCreateXlibSurfaceKHR(
+    instance: vk::Instance,
+    p_create_info: *const vk::XlibSurfaceCreateInfoKHR,
+    p_allocator: *const vk::AllocationCallbacks,
+    p_surface: *mut vk::SurfaceKHR,
+) -> vk::Result {
+    let ly_instance = if let Some(v) = INSTANCE_MAP.get(&instance) {
+        v
+    } else {
+        return vk::Result::ERROR_INITIALIZATION_FAILED;
+    };
+
+    let res = (ly_instance.xlib_surface.fp().create_xlib_surface_khr)(
+        instance,
+        p_create_info,
+        p_allocator,
+        p_surface,
+    );
+    if res == vk::Result::SUCCESS {
+        let info = *p_create_info;
+        init_surface(
+            instance,
+            *p_surface,
+            SurfaceRawHandle::Xlib {
+                dpy: info.dpy as _,
+                window: info.window,
+            },
+        )
+    }
+    res
+}
+const _: vk::PFN_vkCreateXlibSurfaceKHR = pwcap_vkCreateXlibSurfaceKHR;
+
+#[no_mangle]
+unsafe extern "system" fn pwcap_vkCreateXcbSurfaceKHR(
+    instance: vk::Instance,
+    p_create_info: *const vk::XcbSurfaceCreateInfoKHR,
+    p_allocator: *const vk::AllocationCallbacks,
+    p_surface: *mut vk::SurfaceKHR,
+) -> vk::Result {
+    let ly_instance = if let Some(v) = INSTANCE_MAP.get(&instance) {
+        v
+    } else {
+        return vk::Result::ERROR_INITIALIZATION_FAILED;
+    };
+
+    let res = (ly_instance.xcb_surface.fp().create_xcb_surface_khr)(
+        instance,
+        p_create_info,
+        p_allocator,
+        p_surface,
+    );
+    if res == vk::Result::SUCCESS {
+        let info = *p_create_info;
+        init_surface(
+            instance,
+            *p_surface,
+            SurfaceRawHandle::Xcb {
+                connection: info.connection,
+                window: info.window,
+            },
+        )
+    }
+    res
+}
+const _: vk::PFN_vkCreateXcbSurfaceKHR = pwcap_vkCreateXcbSurfaceKHR;
+
+#[no_mangle]
+unsafe extern "system" fn pwcap_vkCreateWaylandSurfaceKHR(
+    instance: vk::Instance,
+    p_create_info: *const vk::WaylandSurfaceCreateInfoKHR,
+    p_allocator: *const vk::AllocationCallbacks,
+    p_surface: *mut vk::SurfaceKHR,
+) -> vk::Result {
+    let ly_instance = if let Some(v) = INSTANCE_MAP.get(&instance) {
+        v
+    } else {
+        return vk::Result::ERROR_INITIALIZATION_FAILED;
+    };
+
+    let res = (ly_instance.wayland_surface.fp().create_wayland_surface_khr)(
+        instance,
+        p_create_info,
+        p_allocator,
+        p_surface,
+    );
+    if res == vk::Result::SUCCESS {
+        let info = *p_create_info;
+        init_surface(
+            instance,
+            *p_surface,
+            SurfaceRawHandle::Wayland {
+                display: info.display,
+                surface: info.surface,
+            },
+        )
+    }
+    res
+}
+const _: vk::PFN_vkCreateWaylandSurfaceKHR = pwcap_vkCreateWaylandSurfaceKHR;
+
+#[no_mangle]
+unsafe extern "system" fn pwcap_vkDestroySurfaceKHR(
+    instance: vk::Instance,
+    surface: vk::SurfaceKHR,
+    p_allocator: *const vk::AllocationCallbacks,
+) {
+    let ly_instance = if let Some(v) = INSTANCE_MAP.get(&instance) {
+        v
+    } else {
+        return;
+    };
+
+    SURFACE_MAP.remove(&surface);
+
+    (ly_instance.khr_surface.fp().destroy_surface_khr)(instance, surface, p_allocator);
+}
+const _: vk::PFN_vkDestroySurfaceKHR = pwcap_vkDestroySurfaceKHR;
+
+#[named]
 unsafe fn on_fixate_format(
     device: vk::Device,
     swapchain: vk::SwapchainKHR,
@@ -853,6 +1056,7 @@ unsafe fn on_process_buffer(
     device: vk::Device,
     swapchain: vk::SwapchainKHR,
     user_handle: client::BufferUserHandle,
+    add_meta_cbs: client::AddBufferMetaCbs,
 ) -> Result<()> {
     let image = match user_handle {
         client::BufferUserHandle::VkImage(image) => image,
@@ -877,6 +1081,24 @@ unsafe fn on_process_buffer(
             return Ok(());
         }
     };
+
+    if let Some(add_cursor) = add_meta_cbs.add_cursor {
+        let old_serial = ly_swapchain.cursor_serial.load(atomic::Ordering::Acquire);
+        if let Some(ly_surface) = SURFACE_MAP.get(&ly_swapchain.surface) {
+            if let Some(cursor_manager) = ly_surface.cursor_manager.as_ref() {
+                if let Ok(snap) = cursor_manager.snapshot_cursor(0) {
+                    let _ = ly_swapchain.cursor_serial.compare_exchange(
+                        old_serial,
+                        snap.serial(),
+                        atomic::Ordering::AcqRel,
+                        atomic::Ordering::Acquire,
+                    );
+                    snap.as_cursor_info(old_serial != snap.serial())
+                        .map(|info| add_cursor(info));
+                }
+            }
+        }
+    }
 
     let mut data = ly_swapchain
         .image_datas
@@ -1005,8 +1227,9 @@ unsafe fn create_stream(
         remove_buffer: Box::new(move |user_handle| {
             let _ = on_remove_buffer(device, swapchain, user_handle).map_err(|e| map_err!(e));
         }),
-        process_buffer: Box::new(move |user_handle| {
-            let _ = on_process_buffer(device, swapchain, user_handle).map_err(|e| map_err!(e));
+        process_buffer: Box::new(move |user_handle, add_meta_cbs| {
+            let _ = on_process_buffer(device, swapchain, user_handle, add_meta_cbs)
+                .map_err(|e| map_err!(e));
         }),
     };
 
@@ -1108,6 +1331,7 @@ unsafe fn create_swapchain_khr(
             image_datas,
             stream,
             export_images: DashMap::new(),
+            cursor_serial: AtomicU64::new(0),
         },
     );
 

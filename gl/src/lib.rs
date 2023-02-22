@@ -9,6 +9,7 @@ use core::fmt::Debug;
 use core::mem;
 use core::ptr;
 use core::slice;
+use core::sync::atomic::{self, AtomicU64};
 use std::collections::VecDeque;
 use std::ffi::CString;
 use std::result::Result::Ok;
@@ -22,6 +23,8 @@ use libc::RTLD_NEXT;
 use libc::{c_char, c_void};
 use once_cell::sync::Lazy;
 use pw_capture_client as client;
+use pw_capture_cursor as local_cursor;
+use pw_capture_cursor::CursorManager;
 use pw_capture_gl_sys::prelude::*;
 use sentinel::{Null, SSlice};
 
@@ -182,17 +185,32 @@ impl Drop for ExportTexture {
     }
 }
 
+struct EglDisplay {
+    platform_display: GlHandle,
+    platform: Option<EglPlatform>,
+}
+
 struct LayerDisplay {
-    surface_valid_map: DashMap<GlHandle, bool>,
+    egl_display: Option<EglDisplay>,
 }
 
 #[allow(unused)]
 struct LayerSurface {
     native: NativeIface,
+    platform_surface: Option<GlHandle>,
+    display: GlHandle,
+    surface: GlHandle,
+    cursor_manager: Option<Box<dyn CursorManager + Sync + Send>>,
+    capture_valid: bool,
+    capture: Option<LayerCapture>,
+}
+
+struct LayerCapture {
     context: GlHandle,
     width: u32,
     height: u32,
-    stream: Option<client::Stream>,
+    cursor_serial: AtomicU64,
+    stream: client::Stream,
     free_textures: Mutex<VecDeque<ExportTexture>>,
     mapped_textures: DashMap<u32, ExportTexture>,
     sync_objects: DashMap<u32, FenceSync>,
@@ -273,7 +291,7 @@ static X11_LIB: Lazy<Option<X11Lib>> = Lazy::new(|| unsafe {
     X11Lib::load_with(|handle, symbol| real_dlsym(handle, symbol.as_ptr()))
 });
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NativeIface {
     Glx,
     Egl,
@@ -382,12 +400,18 @@ unsafe fn do_intercept_egl(name: &CStr) -> Option<*mut c_void> {
     }
     let pfn: *mut c_void = match name.to_bytes() {
         b"eglGetProcAddress" => eglGetProcAddress as _,
+        b"eglGetDisplay" => eglGetDisplay as _,
+        b"eglGetPlatformDisplay" => eglGetPlatformDisplay as _,
+        b"eglGetPlatformDisplayEXT" => eglGetPlatformDisplayEXT as _,
         b"eglCreateWindowSurface" => eglCreateWindowSurface as _,
+        b"eglCreatePlatformWindowSurface" => eglCreatePlatformWindowSurface as _,
+        b"eglCreatePlatformWindowSurfaceEXT" => eglCreatePlatformWindowSurfaceEXT as _,
         b"eglSwapBuffers" => eglSwapBuffers as _,
         b"eglSwapBuffersWithDamageEXT" => eglSwapBuffersWithDamageEXT as _,
         b"eglSwapBuffersWithDamageKHR" => eglSwapBuffersWithDamageKHR as _,
         b"eglDestroySurface" => eglDestroySurface as _,
         b"eglDestroyContext" => eglDestroyContext as _,
+        b"eglTerminate" => eglTerminate as _,
         _ => return None,
     };
     debug!("address: {:?} proc: {}", pfn, name.to_string_lossy());
@@ -486,8 +510,72 @@ pub unsafe extern "C" fn eglGetProcAddress(proc_name: *const c_char) -> *mut c_v
     egl.GetProcAddress(proc_name) as _
 }
 
+unsafe fn add_egl_display(
+    dpy: egl_t::EGLDisplay,
+    platform: Option<EglPlatform>,
+    native_display: *const c_void,
+) {
+    if dpy == egl_sys::NO_DISPLAY {
+        return;
+    }
+    let ly_display = LayerDisplay {
+        egl_display: Some(EglDisplay {
+            platform_display: glhandle!(native_display),
+            platform,
+        }),
+    };
+    DISPLAY_MAP.insert(glhandle!(dpy), ly_display);
+}
+
 #[no_mangle]
 #[named]
+pub unsafe extern "C" fn eglGetDisplay(
+    native_display: egl_t::EGLNativeDisplayType,
+) -> egl_t::EGLDisplay {
+    let egl = egl();
+
+    let egl_plat = egl_get_native_platform(native_display as _);
+
+    let dpy = egl.GetDisplay(native_display);
+    debug!(
+        "native_display:{:?} gl_display:{:?} platform:{:?}",
+        native_display, dpy, egl_plat
+    );
+    add_egl_display(dpy, egl_plat, native_display);
+    dpy
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn eglGetPlatformDisplay(
+    platform: egl_t::EGLenum,
+    native_display: *mut c_void,
+    attrib_list: *const isize,
+) -> egl_t::EGLDisplay {
+    let egl = egl();
+
+    let egl_plat = egl_platform_from_ext(platform);
+
+    let dpy = egl.GetPlatformDisplay(platform, native_display, attrib_list);
+    add_egl_display(dpy, Some(egl_plat), native_display);
+    dpy
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn eglGetPlatformDisplayEXT(
+    platform: egl_t::EGLenum,
+    native_display: *mut c_void,
+    attrib_list: *const i32,
+) -> egl_t::EGLDisplay {
+    let egl = egl();
+
+    let egl_plat = egl_platform_from_ext(platform);
+
+    let dpy = egl.GetPlatformDisplayEXT(platform, native_display, attrib_list);
+    add_egl_display(dpy, Some(egl_plat), native_display);
+    dpy
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn eglCreateWindowSurface(
     dpy: egl_t::EGLDisplay,
     config: egl_t::EGLConfig,
@@ -496,9 +584,37 @@ pub unsafe extern "C" fn eglCreateWindowSurface(
 ) -> egl_t::EGLSurface {
     let egl = egl();
 
-    debug!("win: {:?}", win);
+    let surface = egl.CreateWindowSurface(dpy, config, win, attrib_list);
+    let _ = try_init_surface(NativeIface::Egl, dpy, surface, Some(win as _));
+    surface
+}
 
-    egl.CreateWindowSurface(dpy, config, win, attrib_list)
+#[no_mangle]
+pub unsafe extern "C" fn eglCreatePlatformWindowSurface(
+    dpy: egl_t::EGLDisplay,
+    config: egl_t::EGLConfig,
+    native_window: *mut c_void,
+    attrib_list: *const isize,
+) -> egl_t::EGLSurface {
+    let egl = egl();
+
+    let surface = egl.CreatePlatformWindowSurface(dpy, config, native_window, attrib_list);
+    let _ = try_init_surface(NativeIface::Egl, dpy, surface, Some(native_window as _));
+    surface
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn eglCreatePlatformWindowSurfaceEXT(
+    dpy: egl_t::EGLDisplay,
+    config: egl_t::EGLConfig,
+    native_window: *mut c_void,
+    attrib_list: *const i32,
+) -> egl_t::EGLSurface {
+    let egl = egl();
+
+    let surface = egl.CreatePlatformWindowSurfaceEXT(dpy, config, native_window, attrib_list);
+    let _ = try_init_surface(NativeIface::Egl, dpy, surface, Some(native_window as _));
+    surface
 }
 
 unsafe fn egl_swap_buffer(egl: &Egl, dpy: egl_t::EGLDisplay, surface: egl_t::EGLSurface) {
@@ -566,26 +682,31 @@ pub unsafe extern "C" fn eglDestroyContext(
     egl.DestroyContext(dpy, ctx)
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn eglTerminate(dpy: egl_t::EGLDisplay) -> egl_t::EGLBoolean {
+    let egl = egl();
+
+    DISPLAY_MAP.remove(&glhandle!(dpy));
+
+    egl.Terminate(dpy)
+}
+
 unsafe fn capture(
     native: NativeIface,
     dpy: *const c_void,
-    ly_surface: &LayerSurface,
+    ly_capture: &LayerCapture,
 ) -> Result<()> {
     let gl = gl(native);
 
-    let stream = ly_surface
-        .stream
-        .as_ref()
-        .ok_or(anyhow!("no stream"))?
-        .proxy();
+    let stream = ly_capture.stream.proxy();
 
     let (buffer, user_handle) = if let Some(v) = stream.try_dequeue_buffer()?? {
         v
     } else {
         return Ok(());
     };
-    let width = ly_surface.width;
-    let height = ly_surface.height;
+    let width = ly_capture.width;
+    let height = ly_capture.height;
 
     let texture = match user_handle {
         client::BufferUserHandle::Texture(v) => v,
@@ -650,7 +771,7 @@ unsafe fn capture(
         }
 
         if let Some(sync) = FenceSync::new(native, dpy) {
-            ly_surface.sync_objects.insert(texture, sync);
+            ly_capture.sync_objects.insert(texture, sync);
         } else {
             gl.Finish();
         }
@@ -696,38 +817,34 @@ unsafe fn query_surface_extent(
 
 #[named]
 unsafe fn try_capture(native: NativeIface, dpy: *const c_void, surface: *const c_void) {
-    let dpy_handle = glhandle!(dpy);
     let surface_handle = glhandle!(surface);
-    if let Some(ly_display) = DISPLAY_MAP.get(&dpy_handle) {
-        if let Some(valid) = ly_display.surface_valid_map.get(&surface_handle) {
-            if !*valid {
-                return;
-            }
-        } else {
-            ly_display.surface_valid_map.insert(surface_handle, true);
+    if let Some(ly_display) = SURFACE_MAP.get(&surface_handle) {
+        if !ly_display.capture_valid {
+            return;
         }
     } else {
-        DISPLAY_MAP.insert(
-            dpy_handle,
-            LayerDisplay {
-                surface_valid_map: DashMap::new(),
-            },
-        );
+        try_init_surface(native, dpy, surface, None);
     };
-    match try_init_surface(native, dpy, surface) {
+
+    match try_init_capture(native, dpy, surface) {
         Ok(()) => (),
         Err(e) => {
-            if let Some(ly_display) = DISPLAY_MAP.get(&dpy_handle) {
-                ly_display.surface_valid_map.insert(surface_handle, false);
+            if let Some(mut ly_surface) = SURFACE_MAP.get_mut(&surface_handle) {
+                ly_surface.capture_valid = false;
+                let capture = ly_surface.capture.take();
+                drop(ly_surface);
+                drop(capture);
             }
             warn!("failed to init capture context: {e:?}");
             return;
         }
     }
-    let handle = glhandle!(surface);
-    let ly_surface = SURFACE_MAP.get(&handle).unwrap();
-    if let Err(e) = capture(native, dpy, &ly_surface) {
-        warn!("capture error: {e:?}");
+    if let Some(ly_surface) = SURFACE_MAP.get(&surface_handle) {
+        if let Err(e) = capture(native, dpy, ly_surface.capture.as_ref().unwrap()) {
+            warn!("capture error: {e:?}");
+        }
+    } else {
+        error!("surface data not exist")
     }
 }
 
@@ -749,7 +866,116 @@ unsafe fn get_current_context(native: NativeIface) -> Option<GlHandle> {
 }
 
 #[named]
+unsafe fn create_xcb_cursor_manager(
+    _dpy: Option<*const c_void>,
+    _dpy_is_xcb: bool,
+    window: u32,
+) -> Option<Box<dyn CursorManager + Send + Sync>> {
+    // create a new connection as we use the connection in another thread,
+    // the drawback is it only connect to the default display or `DISPLAY`
+    // so it might connect to a diffident server
+    match local_cursor::XcbWindow::new_connection(window) {
+        Ok(m) => Some(Box::new(m)),
+        Err(e) => {
+            warn!("failed to create xcb cursor manager: {e:?}");
+            None
+        }
+    }
+}
+
+#[named]
 unsafe fn try_init_surface(
+    native: NativeIface,
+    dpy: *const c_void,
+    surface: *const c_void,
+    platform_surface: Option<*const c_void>,
+) {
+    let dpy_handle = glhandle!(dpy);
+    let surface_handle = glhandle!(surface);
+    if let Some(_ly_surface) = SURFACE_MAP.get(&surface_handle) {
+        return;
+    }
+
+    debug!(
+        "native:{:?}, display:{:?}, surface:{:?}, platform surface:{:?}",
+        native, dpy, surface, platform_surface
+    );
+
+    let platform_surface = match native {
+        NativeIface::Glx => Some(glhandle!(surface)),
+        _ => platform_surface.map(|v| glhandle!(v)),
+    };
+
+    let cursor_manager: Option<Box<dyn CursorManager + Send + Sync>> = loop {
+        let platform_surface = if let Some(v) = platform_surface {
+            v
+        } else {
+            break None;
+        };
+        match native {
+            NativeIface::Egl => {
+                let ly_display = if let Some(v) = DISPLAY_MAP.get(&dpy_handle) {
+                    v
+                } else {
+                    break None;
+                };
+                let EglDisplay {
+                    platform_display,
+                    platform,
+                } = if let Some(v) = &ly_display.egl_display {
+                    v
+                } else {
+                    break None;
+                };
+
+                if let Some(platform) = platform {
+                    match *platform {
+                        EglPlatform::X11 => {
+                            break create_xcb_cursor_manager(
+                                Some(platform_display.as_ptr()),
+                                false,
+                                platform_surface.as_raw() as _,
+                            );
+                        }
+                        EglPlatform::Xcb => {
+                            break create_xcb_cursor_manager(
+                                Some(platform_display.as_ptr()),
+                                true,
+                                platform_surface.as_raw() as _,
+                            );
+                        }
+                        EglPlatform::Wayland => {
+                            // TODO
+                        }
+                        _ => (),
+                    }
+                } else {
+                    // fallback to X11/XCB platform,
+                    // returns None if window does not exists in default connection
+                    break create_xcb_cursor_manager(None, false, platform_surface.as_raw() as _);
+                }
+            }
+            NativeIface::Glx => {
+                break create_xcb_cursor_manager(Some(dpy), false, platform_surface.as_raw() as _)
+            }
+        }
+        break None;
+    };
+
+    let ly_surface = LayerSurface {
+        native,
+        platform_surface,
+        display: glhandle!(dpy),
+        surface: surface_handle,
+        cursor_manager,
+        capture_valid: true,
+        capture: None,
+    };
+    SURFACE_MAP.insert(surface_handle, ly_surface);
+}
+
+#[named]
+unsafe fn try_init_capture(
     native: NativeIface,
     dpy: *const c_void,
     surface: *const c_void,
@@ -767,19 +993,23 @@ unsafe fn try_init_surface(
     }
 
     if let Some(mut ly_surface) = SURFACE_MAP.get_mut(&handle) {
-        if ly_surface.context != context {
-            return Err(anyhow!("context switching not supported"));
+        if let Some(ly_capture) = ly_surface.capture.as_ref() {
+            if ly_capture.context != context {
+                return Err(anyhow!("context switching not supported"));
+            }
+            if ly_capture.width == width && ly_capture.height == height {
+                return Ok(());
+            }
         }
-        if ly_surface.width == width && ly_surface.height == height {
-            return Ok(());
+        if let Some(ly_capture) = ly_surface.capture.take() {
+            // IMPORTANT: drop the write lock first as try_terminate()
+            // would call into callbacks that requires read lock to surface item
+            drop(ly_surface);
+            let _ = ly_capture.stream.proxy().try_terminate();
         }
-        let stream = ly_surface.stream.take();
-        // IMPORTANT: drop the write lock first as try_terminate()
-        // would call into callbacks that requires read lock to surface item
-        drop(ly_surface);
-        stream.map(|s| s.proxy().try_terminate());
+    } else {
+        return Err(anyhow!("surface not exist"));
     }
-    SURFACE_MAP.remove(&handle);
 
     info!("{:?}: {}x{}", native, width, height);
 
@@ -794,12 +1024,11 @@ unsafe fn try_init_surface(
         textures.len() as _,
         width as _,
         height as _,
-    )
-    .ok();
+    )?;
 
-    let ly_surface = LayerSurface {
-        native,
+    let ly_capture = LayerCapture {
         context,
+        cursor_serial: AtomicU64::new(0),
         width,
         height,
         stream,
@@ -807,7 +1036,13 @@ unsafe fn try_init_surface(
         mapped_textures: DashMap::new(),
         sync_objects: DashMap::new(),
     };
-    SURFACE_MAP.insert(handle, ly_surface);
+
+    if let Some(mut ly_surface) = SURFACE_MAP.get_mut(&handle) {
+        ly_surface.capture_valid = true;
+        ly_surface.capture = Some(ly_capture);
+    } else {
+        return Err(anyhow!("surface not exist"));
+    }
 
     Ok(())
 }
@@ -818,11 +1053,16 @@ unsafe fn destroy_surface(dpy: *const c_void, surface: *const c_void) {
     let handle = glhandle!(surface);
     loop {
         if let Some(ly_surface) = SURFACE_MAP.get(&handle) {
+            if ly_surface.capture.is_none() {
+                break;
+            }
             if let Some(context) = get_current_context(ly_surface.native) {
-                if ly_surface.context == context {
-                    break;
+                if let Some(ly_capture) = &ly_surface.capture {
+                    if ly_capture.context == context {
+                        break;
+                    }
+                    warn!("context changed: {:?} -> {:?}", ly_capture.context, context);
                 }
-                warn!("context changed: {:?} -> {:?}", ly_surface.context, context);
             }
         }
         return;
@@ -830,10 +1070,10 @@ unsafe fn destroy_surface(dpy: *const c_void, surface: *const c_void) {
     if let Some((_, _ly_surface)) = SURFACE_MAP.remove(&glhandle!(surface)) {
         // extra destroy work
     }
-    if let Some(ly_display) = DISPLAY_MAP.get(&glhandle!(dpy)) {
-        debug!("destroyed");
-        ly_display.surface_valid_map.remove(&glhandle!(surface));
-    }
+    // if let Some(ly_display) = DISPLAY_MAP.get(&glhandle!(dpy)) {
+    //     debug!("destroyed");
+    //     ly_display.surface_valid_map.remove(&glhandle!(surface));
+    // }
 }
 
 #[named]
@@ -843,11 +1083,12 @@ unsafe fn destroy_context(dpy: *const c_void, ctx: *const c_void) {
     let to_destroy = SURFACE_MAP
         .iter()
         .filter_map(|ly_surface| {
-            if ly_surface.context == ctx {
-                Some(*ly_surface.key())
-            } else {
-                None
+            if let Some(ly_capture) = &ly_surface.capture {
+                if ly_capture.context == ctx {
+                    return Some(*ly_surface.key());
+                }
             }
+            None
         })
         .collect::<Vec<_>>();
     for surface in to_destroy {
@@ -1158,8 +1399,12 @@ fn on_add_buffer(surface: GlHandle) -> Result<client::BufferInfo> {
     let ly_surface = SURFACE_MAP
         .get(&surface)
         .ok_or(anyhow!("surface removed"))?;
+    let ly_capture = ly_surface
+        .capture
+        .as_ref()
+        .ok_or(anyhow!("no capture data"))?;
 
-    let export_texture = ly_surface
+    let export_texture = ly_capture
         .free_textures
         .lock()
         .map_err(|e| anyhow!("{e:?}"))?
@@ -1173,7 +1418,7 @@ fn on_add_buffer(surface: GlHandle) -> Result<client::BufferInfo> {
         user_handle: client::BufferUserHandle::Texture(texture),
     };
 
-    ly_surface.mapped_textures.insert(texture, export_texture);
+    ly_capture.mapped_textures.insert(texture, export_texture);
 
     Ok(res)
 }
@@ -1184,18 +1429,21 @@ fn on_remove_buffer(surface: GlHandle, user_handle: client::BufferUserHandle) ->
     let ly_surface = SURFACE_MAP
         .get(&surface)
         .ok_or(anyhow!("surface removed"))?;
-    debug!("acquired");
+    let ly_capture = ly_surface
+        .capture
+        .as_ref()
+        .ok_or(anyhow!("no capture data"))?;
 
     let texture = match user_handle {
         client::BufferUserHandle::Texture(v) => v,
         _ => unreachable!(),
     };
-    let (_, export_texture) = ly_surface
+    let (_, export_texture) = ly_capture
         .mapped_textures
         .remove(&texture)
         .ok_or(anyhow!("texture already unmapped"))?;
 
-    ly_surface
+    ly_capture
         .free_textures
         .lock()
         .unwrap()
@@ -1205,24 +1453,45 @@ fn on_remove_buffer(surface: GlHandle, user_handle: client::BufferUserHandle) ->
 }
 
 #[named]
-fn on_process_buffer(surface: GlHandle, user_handle: client::BufferUserHandle) -> Result<()> {
-    trace!("process buffer {:?}", user_handle);
+fn on_process_buffer(
+    surface: GlHandle,
+    user_handle: client::BufferUserHandle,
+    add_meta_cbs: client::AddBufferMetaCbs,
+) -> Result<()> {
     let ly_surface = SURFACE_MAP
         .get(&surface)
         .ok_or(anyhow!("surface removed"))?;
+    let ly_capture = ly_surface
+        .capture
+        .as_ref()
+        .ok_or(anyhow!("no capture data"))?;
 
     let texture = match user_handle {
         client::BufferUserHandle::Texture(v) => v,
         _ => unreachable!(),
     };
 
-    let sync = if let Some((_, sync)) = ly_surface.sync_objects.remove(&texture) {
-        sync
-    } else {
-        return Ok(());
-    };
+    if let Some(add_cursor) = add_meta_cbs.add_cursor {
+        let old_serial = ly_capture.cursor_serial.load(atomic::Ordering::Acquire);
+        if let Some(cursor_manager) = ly_surface.cursor_manager.as_ref() {
+            if let Ok(snap) = cursor_manager.snapshot_cursor(old_serial) {
+                let _ = ly_capture.cursor_serial.compare_exchange(
+                    old_serial,
+                    snap.serial(),
+                    atomic::Ordering::AcqRel,
+                    atomic::Ordering::Acquire,
+                );
 
-    unsafe { sync.wait() };
+                snap.as_cursor_info(old_serial != snap.serial())
+                    .map(|info| add_cursor(info));
+            }
+        }
+    }
+
+    if let Some((_, sync)) = ly_capture.sync_objects.remove(&texture) {
+        drop(ly_surface);
+        unsafe { sync.wait() };
+    };
 
     trace!("processed");
 
@@ -1263,8 +1532,8 @@ fn create_stream(
         remove_buffer: Box::new(move |user_handle| {
             let _ = on_remove_buffer(surface, user_handle);
         }),
-        process_buffer: Box::new(move |user_handle| {
-            let _ = on_process_buffer(surface, user_handle);
+        process_buffer: Box::new(move |user_handle, add_meta_cbs| {
+            let _ = on_process_buffer(surface, user_handle, add_meta_cbs);
         }),
     };
     CLIENT

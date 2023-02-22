@@ -17,6 +17,7 @@ anyhow = "1.0.68"
 dashmap = "5.4.0"
 function_name = "0.3.0"
 once_cell = "1.17.0"
+pw-capture-cursor = { version = "0.0.1", path = "../cursor" }
 
 [dependencies.elf]
 version = "0.7.1"

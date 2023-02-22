@@ -1,4 +1,4 @@
-use crate::Format;
+use crate::{Format, Point};
 
 pub(crate) use libspa as spa;
 pub(crate) use libspa_sys as spa_sys;
@@ -116,5 +116,14 @@ impl TryFrom<Value> for VideoRawInfo {
             }
         }
         Ok(info)
+    }
+}
+
+impl From<Point> for spa_sys::spa_point {
+    fn from(value: Point) -> Self {
+        Self {
+            x: value.x,
+            y: value.y,
+        }
     }
 }

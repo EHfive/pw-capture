@@ -342,6 +342,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "201de327520df007757c1f0adce6e827fe8562fbc28bfd9c15571c66ca1f5f79"
 
 [[package]]
+name = "libloading"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b67380fd3b2fbe7527a606e18729d21c6f3951633d0500574c4dc22d2d638b9f"
+dependencies = [
+ "cfg-if",
+ "winapi",
+]
+
+[[package]]
 name = "libspa"
 version = "0.5.0"
 source = "git+https://gitlab.freedesktop.org/eh5/pipewire-rs?branch=pw-capture#54fc92fce44252bfff0119083679e81a6df412f5"
@@ -612,6 +622,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pw-capture-cursor"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "libc",
+ "once_cell",
+ "pw-capture-client",
+ "xcb-dl",
+]
+
+[[package]]
 name = "pw-capture-gl"
 version = "0.0.1"
 dependencies = [
@@ -623,6 +644,7 @@ dependencies = [
  "log",
  "once_cell",
  "pw-capture-client",
+ "pw-capture-cursor",
  "pw-capture-gl-sys",
  "sentinel",
 ]
@@ -648,6 +670,7 @@ dependencies = [
  "log",
  "once_cell",
  "pw-capture-client",
+ "pw-capture-cursor",
 ]
 
 [[package]]
@@ -931,6 +954,15 @@ name = "windows_x86_64_msvc"
 version = "0.42.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "447660ad36a13288b1db4d4248e857b510e8c3a225c822ba4fb748c0aafecffd"
+
+[[package]]
+name = "xcb-dl"
+version = "0.2.1"
+source = "git+https://github.com/EHfive/xcb-dl?branch=fix-extern-c#a8cd7a92259fb42a69c9f99a2221d61efbb4d306"
+dependencies = [
+ "libc",
+ "libloading",
+]
 
 [[package]]
 name = "xml-rs"

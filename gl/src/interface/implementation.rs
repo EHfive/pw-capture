@@ -468,7 +468,7 @@ unsafe fn capture(
         }
 
         if gl.DrawBuffers.is_loaded() {
-            let buffers = &[1];
+            let buffers = &[gl_sys::COLOR_ATTACHMENT0];
             gl.DrawBuffers(1, buffers.as_ptr());
         } else if gl.DrawBuffer.is_loaded() {
             gl.DrawBuffer(gl_sys::COLOR_ATTACHMENT0);
@@ -487,7 +487,7 @@ unsafe fn capture(
                 width as _,
                 0 as _,
                 gl_sys::COLOR_BUFFER_BIT,
-                gl_sys::LINEAR,
+                gl_sys::NEAREST,
             );
         } else {
             unimplemented!()

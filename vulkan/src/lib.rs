@@ -1,11 +1,10 @@
 mod utils;
 use utils::*;
 
-use local_cursor::CursorManager;
 use pw_capture_client as client;
-use pw_capture_cursor as local_cursor;
+use pw_capture_cursor::{self as local_cursor, CursorManager, CursorSnapshot};
 
-use core::ffi::{c_char, CStr};
+use core::ffi::{c_char, c_void, CStr};
 use core::mem;
 use core::ptr;
 use core::result::Result::{Err, Ok};
@@ -64,7 +63,9 @@ struct LayerQueue {
 struct LayerSurface {
     #[allow(unused)]
     instance: vk::Instance,
+    #[allow(unused)]
     cursor_manager: Option<Box<dyn CursorManager + Send + Sync>>,
+    wl_cursor_manager: usize,
 }
 
 struct ImageData {
@@ -147,6 +148,28 @@ macro_rules! map_result {
             Err(e) => map_err!(e),
         }
     };
+}
+
+/// would be injected by GL layer
+#[no_mangle]
+pub unsafe fn me_eh5_pw_capture_get_wl_cursor_manager(
+    _display: *mut c_void,
+    _surface: *mut c_void,
+) -> usize {
+    0
+}
+
+#[no_mangle]
+pub unsafe fn me_eh5_pw_capture_release_wl_cursor_manager(_cursor_manager: usize) -> bool {
+    false
+}
+
+#[no_mangle]
+pub unsafe fn me_eh5_pw_capture_wl_cursor_snapshot(
+    _cursor_manager: usize,
+    _serial: u64,
+) -> Option<Box<dyn CursorSnapshot>> {
+    None
 }
 
 #[no_mangle]
@@ -648,6 +671,7 @@ unsafe fn init_surface(
     raw_handle: SurfaceRawHandle,
 ) {
     debug!("create surface: {:?} raw_handle: {:?}", surface, raw_handle);
+    let mut wl_cursor_manager = 0;
     let cursor_manager: Option<Box<dyn CursorManager + Send + Sync>> = loop {
         match raw_handle {
             SurfaceRawHandle::Xlib { dpy: _, window } => {
@@ -671,18 +695,17 @@ unsafe fn init_surface(
                     }
                 }
             }
-            SurfaceRawHandle::Wayland {
-                display: _,
-                surface: _,
-            } => {
-                // TODO
+            SurfaceRawHandle::Wayland { display, surface } => {
+                wl_cursor_manager = me_eh5_pw_capture_get_wl_cursor_manager(display, surface);
             }
         };
         break None;
     };
+
     let ly_surface = LayerSurface {
         instance,
         cursor_manager,
+        wl_cursor_manager,
     };
     SURFACE_MAP.insert(surface, ly_surface);
 }
@@ -801,7 +824,11 @@ unsafe extern "system" fn pwcap_vkDestroySurfaceKHR(
         return;
     };
 
-    SURFACE_MAP.remove(&surface);
+    if let Some((_, ly_surface)) = SURFACE_MAP.remove(&surface) {
+        if ly_surface.wl_cursor_manager > 0 {
+            me_eh5_pw_capture_release_wl_cursor_manager(ly_surface.wl_cursor_manager);
+        }
+    }
 
     (ly_instance.khr_surface.fp().destroy_surface_khr)(instance, surface, p_allocator);
 }
@@ -1084,19 +1111,23 @@ unsafe fn on_process_buffer(
 
     if let Some(add_cursor) = add_meta_cbs.add_cursor {
         let old_serial = ly_swapchain.cursor_serial.load(atomic::Ordering::Acquire);
+        let mut snap = None;
         if let Some(ly_surface) = SURFACE_MAP.get(&ly_swapchain.surface) {
-            if let Some(cursor_manager) = ly_surface.cursor_manager.as_ref() {
-                if let Ok(snap) = cursor_manager.snapshot_cursor(0) {
-                    let _ = ly_swapchain.cursor_serial.compare_exchange(
-                        old_serial,
-                        snap.serial(),
-                        atomic::Ordering::AcqRel,
-                        atomic::Ordering::Acquire,
-                    );
-                    snap.as_cursor_info(old_serial != snap.serial())
-                        .map(|info| add_cursor(info));
-                }
+            if ly_surface.wl_cursor_manager > 0 {
+                snap =
+                    me_eh5_pw_capture_wl_cursor_snapshot(ly_surface.wl_cursor_manager, old_serial);
+            } else if let Some(cursor_manager) = ly_surface.cursor_manager.as_ref() {
+                snap = cursor_manager.snapshot_cursor(old_serial).ok();
             }
+        }
+        if let Some(snap) = snap {
+            let _ = ly_swapchain.cursor_serial.compare_exchange(
+                old_serial,
+                snap.serial(),
+                atomic::Ordering::AcqRel,
+                atomic::Ordering::Acquire,
+            );
+            snap.as_cursor_info(true).map(|info| add_cursor(info));
         }
     }
 

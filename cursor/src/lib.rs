@@ -1,5 +1,8 @@
+mod utils;
+mod wayland;
 mod xcb;
 
+pub use wayland::*;
 pub use xcb::*;
 
 use core::ptr;

@@ -69,14 +69,24 @@ ENABLE_PW_CAPTURE=1 vkcube
 
 **Note**: use `pw-dump` to inspect the node info and use tools like [pw-viz](https://github.com/Ax9D/pw-viz) or [qpwgraph](https://gitlab.freedesktop.org/rncbc/qpwgraph) to view the node in graph.
 
-### Install
+### Requirements
+
+- pipewire:  `>=0.3.41`
+- libffi: Wayland event dispatching
+
+Below are implicit dependencies and would be loaded on demand
+- libx11, libxcb: DRI3 buffer export and X11/XCB cursor query
+- libwayland-client: Wayland cursor interception
+- libglvnd: libEGL, libGLX/libGL interception
+
+### Installation
 
 | Repo       | Package                                                                         |
 | ---------- | ------------------------------------------------------------------------------- |
 | AUR (Arch) | [pw-capture-git](https://aur.archlinux.org/packages/pw-capture-git)             |
 |            | [lib32-pw-capture-git](https://aur.archlinux.org/packages/lib32-pw-capture-git) |
 
-#### Manually Install
+#### Install Manually
 
 We have set up a meson script to make installation more \*unix idiomatic, you could instead follow [Development](#development).
 
@@ -144,7 +154,7 @@ gst-launch-1.0 -e pipewiresrc target-object=999 min-buffers=64 \
 - [x] Installation script
 - [x] OpenGL support
 - [x] Passing cursor position & bitmap in buffer meta (X11)
-- [ ] Wayland cursor capture (by intercepting libwayland-client)
+- [x] Wayland cursor capture (by intercepting libwayland-client)
 - [ ] Support export image that maps or copies to memfd as fallback of DMA-BUF export
 - [ ] Add more control options (via env vars or config file)
 - [ ] Support color conversion to common YUV formats with render pipeline

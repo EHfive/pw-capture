@@ -1,6 +1,6 @@
 use super::{cstr, dlopen};
 
-use core::ffi::{c_uchar, c_void};
+use core::ffi::{c_int, c_uchar, c_void};
 use core::ptr;
 use std::env;
 
@@ -49,45 +49,43 @@ fn egl_get_native_platform_from_env() -> Option<EglPlatform> {
     Some(res)
 }
 
-fn egl_pointer_is_dereferencable(p: *mut c_void) -> bool {
+// see https://gitlab.freedesktop.org/mesa/mesa/-/blob/44ccaca41d41e5dfa660f7c2fb6e50aa2ff03e22/src/egl/main/eglglobals.c#L142-161
+unsafe fn egl_pointer_is_dereferencable(p: *mut c_void) -> bool {
     if p.is_null() {
         return false;
     }
-    let page_size = unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) };
+    let page_size = libc::sysconf(libc::_SC_PAGE_SIZE);
     if page_size <= 0 {
         return false;
     }
-    let addr = (p as usize) + p.align_offset(page_size as _);
+    let addr = (p as usize) & !(page_size as usize - 1);
+
     let mut valid: c_uchar = 0;
-    let res = unsafe { libc::mincore(addr as _, page_size as _, &mut valid) };
-    eprintln!(
-        "page size {} addr {} aligned {} valid {} res {}",
-        page_size, p as usize, addr, valid, res
-    );
+    let res = libc::mincore(addr as _, page_size as _, &mut valid);
 
     return res >= 0;
 }
 
-fn egl_native_platform_detect_native_display(native_display: *mut c_void) -> Option<EglPlatform> {
+unsafe fn egl_native_platform_detect_native_display(
+    native_display: *mut c_void,
+) -> Option<EglPlatform> {
     if native_display == EGL_DEFAULT_DISPLAY {
         return None;
     }
 
     if egl_pointer_is_dereferencable(native_display) {
-        unsafe {
-            let first = *(native_display as *mut *mut c_void);
-            if first.is_null() {
-                return None;
-            }
-            if let Some(handle) = dlopen(&[
-                cstr!(b"libwayland-client.so.0\0"),
-                cstr!(b"libwayland-client.so\0"),
-            ]) {
-                let wl_display_interface =
-                    libc::dlsym(handle, cstr!(b"wl_display_interface\0").as_ptr());
-                if wl_display_interface == first {
-                    return Some(EglPlatform::Wayland);
-                }
+        let first = *(native_display as *mut *mut c_void);
+        if first.is_null() {
+            return None;
+        }
+        if let Some(handle) = dlopen(&[
+            cstr!(b"libwayland-client.so.0\0"),
+            cstr!(b"libwayland-client.so\0"),
+        ]) {
+            let wl_display_interface =
+                libc::dlsym(handle, cstr!(b"wl_display_interface\0").as_ptr());
+            if wl_display_interface == first {
+                return Some(EglPlatform::Wayland);
             }
         }
     }
@@ -95,7 +93,38 @@ fn egl_native_platform_detect_native_display(native_display: *mut c_void) -> Opt
     None
 }
 
-pub fn egl_get_native_platform(native_display: *mut c_void) -> Option<EglPlatform> {
+#[repr(C)]
+#[allow(non_camel_case_types)]
+pub struct wl_egl_window_v3 {
+    version: usize,
+    width: c_int,
+    height: c_int,
+    dx: c_int,
+    dy: c_int,
+    attached_width: c_int,
+    attached_height: c_int,
+    driver_private: *mut c_void,
+    resize_callback: Option<unsafe extern "C" fn(*mut wl_egl_window_v3, *mut c_void)>,
+    destroy_window_callback: Option<unsafe extern "C" fn(*mut c_void)>,
+    surface: *mut c_void,
+}
+
+// see https://gitlab.freedesktop.org/mesa/mesa/-/blob/c8d7e0c0235327928d9d9b12c0b603739e53f1c5/src/egl/drivers/dri2/platform_wayland.c#L417-428
+pub unsafe fn wl_egl_window_get_wl_surface(window: *mut wl_egl_window_v3) -> *mut c_void {
+    let window = &*window;
+    if egl_pointer_is_dereferencable(window.version as _) {
+        return window.version as _;
+    }
+    match window.version {
+        3 => window.surface,
+        _ => {
+            log::warn!("unhandled wl_egl_window struct version {}", window.version);
+            ptr::null_mut()
+        }
+    }
+}
+
+pub unsafe fn egl_get_native_platform(native_display: *mut c_void) -> Option<EglPlatform> {
     if let Some(plat) = egl_get_native_platform_from_env() {
         return Some(plat);
     }

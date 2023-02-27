@@ -1,14 +1,19 @@
 mod implementation;
 mod state;
 mod types;
+mod wl_impl;
 
 use implementation::*;
 use state::*;
 use types::*;
+use wl_impl::*;
 
 use crate::elfhack::*;
 
+use core::ffi::c_int;
+
 use libc::{c_char, c_void};
+use pw_capture_cursor::wl_sys::*;
 use pw_capture_gl_sys::prelude::*;
 
 #[no_mangle]
@@ -26,6 +31,63 @@ pub unsafe extern "C" fn dlvsym(
     impl_dlvsym(handle, symbol, version)
 }
 const _: DlvsymFunc = dlvsym;
+
+/// Provides actual implementation for underlying Vulkan Layer
+pub use wl_impl::me_eh5_pw_capture_get_wl_cursor_manager;
+pub use wl_impl::me_eh5_pw_capture_release_wl_cursor_manager;
+pub use wl_impl::me_eh5_pw_capture_wl_cursor_snapshot;
+
+#[no_mangle]
+pub unsafe extern "C" fn wl_proxy_marshal_array_flags(
+    proxy: *mut wl_proxy,
+    opcode: u32,
+    interface: *const wl_interface,
+    version: u32,
+    flags: u32,
+    args: *mut wl_argument,
+) -> *mut wl_proxy {
+    impl_wl_proxy_marshal_array_flags(proxy, opcode, interface, version, flags, args)
+}
+
+#[cfg(feature = "nightly")]
+pub use wl_impl::wl_proxy_marshal_flags;
+
+#[no_mangle]
+pub unsafe extern "C" fn wl_proxy_create(
+    factory: *mut wl_proxy,
+    interface: *const wl_interface,
+) -> *mut wl_proxy {
+    impl_wl_proxy_create(factory, interface)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wl_proxy_add_listener(
+    proxy: *mut wl_proxy,
+    implementation: *mut PFN_void,
+    data: *mut c_void,
+) -> c_int {
+    impl_wl_proxy_add_listener(proxy, implementation, data)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wl_proxy_add_dispatcher(
+    proxy: *mut wl_proxy,
+    dispatcher: Option<PFN_wl_dispatcher>,
+    implementation: *mut c_void,
+    data: *mut c_void,
+) -> c_int {
+    impl_wl_proxy_add_dispatcher(proxy, dispatcher, implementation, data)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wl_proxy_get_listener(proxy: *mut wl_proxy) -> *mut c_void {
+    impl_wl_proxy_get_listener(proxy)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wl_proxy_destroy(proxy: *mut wl_proxy) {
+    impl_wl_proxy_destroy(proxy)
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn glXGetProcAddress(proc_name: *const c_char) -> *mut c_void {

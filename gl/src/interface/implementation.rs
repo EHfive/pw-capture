@@ -67,6 +67,14 @@ unsafe fn do_intercept(name: &CStr) -> Option<*mut c_void> {
     let pfn: *mut c_void = match name.to_bytes() {
         b"dlsym" => impl_dlsym as _,
         b"dlvsym" => impl_dlvsym as _,
+        b"wl_proxy_marshal_array_flags" => impl_wl_proxy_marshal_array_flags as _,
+        #[cfg(feature = "nightly")]
+        b"wl_proxy_marshal_flags" => impl_wl_proxy_marshal_flags as _,
+        b"wl_proxy_create" => impl_wl_proxy_create as _,
+        b"wl_proxy_add_listener" => impl_wl_proxy_add_listener as _,
+        b"wl_proxy_add_dispatcher" => impl_wl_proxy_add_dispatcher as _,
+        b"wl_proxy_get_listener" => impl_wl_proxy_get_listener as _,
+        b"wl_proxy_destroy" => impl_wl_proxy_destroy as _,
         _ => do_intercept_egl(name).or_else(|| do_intercept_glx(name))?,
     };
     return Some(pfn);
@@ -298,6 +306,8 @@ pub unsafe extern "C" fn impl_eglCreateWindowSurface(
     attrib_list: *const i32,
 ) -> egl_t::EGLSurface {
     let egl = egl();
+
+    let win = *(win as *const *const c_void);
 
     let surface = egl.CreateWindowSurface(dpy, config, win, attrib_list);
     let _ = try_init_surface(NativeIface::Egl, dpy, surface, Some(win as _));
@@ -668,7 +678,25 @@ unsafe fn try_init_surface(
                             );
                         }
                         EglPlatform::Wayland => {
-                            // TODO
+                            let wl_surface = wl_egl_window_get_wl_surface(
+                                platform_surface.as_ptr::<c_void>() as _,
+                            );
+                            debug!(
+                                "wl_egl_window:{:?} wl_surface:{:?}",
+                                platform_surface, wl_surface
+                            );
+                            if wl_surface.is_null() {
+                                break None;
+                            }
+                            let m = WL_INTERCEPT.as_ref().and_then(|intercept| {
+                                intercept.get_cursor_manager(
+                                    platform_display.as_ptr::<wl_display>() as _,
+                                    wl_surface as _,
+                                )
+                            });
+                            if let Some(m) = m {
+                                break Some(Box::new(m));
+                            }
                         }
                         _ => (),
                     }

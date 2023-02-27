@@ -13,6 +13,7 @@ use libc::RTLD_NEXT;
 use libc::{c_char, c_void};
 use once_cell::sync::Lazy;
 use pw_capture_client as client;
+use pw_capture_cursor::WlIntercept;
 
 pub static GLOBAL_INIT: Lazy<()> = Lazy::new(|| init_logger());
 
@@ -87,6 +88,12 @@ pub static GL_GLX: Lazy<Option<(Gl, Glx)>> = Lazy::new(|| unsafe {
 
 pub static X11_LIB: Lazy<Option<X11Lib>> = Lazy::new(|| unsafe {
     X11Lib::load_with(|handle, symbol| real_dlsym(handle, symbol.as_ptr()))
+});
+
+pub static WL_INTERCEPT: Lazy<Option<WlIntercept>> = Lazy::new(|| unsafe {
+    WlIntercept::new_load_with(|h, s| real_dlsym(h, s.as_ptr()))
+        .map_err(|e| log::warn!("failed to create WlIntercept instance: {e:?}"))
+        .ok()
 });
 
 pub static CLIENT: Lazy<Option<client::Client>> = Lazy::new(|| {

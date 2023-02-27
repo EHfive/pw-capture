@@ -1127,7 +1127,8 @@ unsafe fn on_process_buffer(
                 atomic::Ordering::AcqRel,
                 atomic::Ordering::Acquire,
             );
-            snap.as_cursor_info(true).map(|info| add_cursor(info));
+            snap.as_cursor_info(old_serial != snap.serial())
+                .map(|info| add_cursor(info));
         }
     }
 

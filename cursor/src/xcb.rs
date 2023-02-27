@@ -23,7 +23,6 @@ pub struct XcbCursor {
     translate_coordinates: OwnedMem<xcb_t::xcb_translate_coordinates_reply_t>,
     cursor_image: OwnedMem<xcb_t::xcb_xfixes_get_cursor_image_reply_t>,
     pixels: Option<ptr::NonNull<u8>>,
-    focused: bool,
     serial: u64,
 }
 
@@ -76,7 +75,6 @@ impl Drop for XcbWindow {
 
 impl CursorManager for XcbWindow {
     fn snapshot_cursor(&self, serial: u64) -> Result<Box<dyn CursorSnapshot>> {
-        let prev_focused = (serial >> 32) != 0;
         let serial = (serial & u32::MAX as u64) as u32;
         unsafe {
             let geometry_cookie = self
@@ -86,8 +84,6 @@ impl CursorManager for XcbWindow {
                 self.xcb
                     .xcb_get_geometry_reply(self.conn as _, geometry_cookie, ptr::null_mut());
             let geometry = OwnedMem::new(reply).ok_or(anyhow!("xcb_get_geometry failed"))?;
-
-            let focus_cookie = self.xcb.xcb_get_input_focus_unchecked(self.conn as _);
 
             let root = if geometry.as_ref().root != 0 {
                 geometry.as_ref().root
@@ -104,12 +100,6 @@ impl CursorManager for XcbWindow {
             let cursor_cookie = self
                 .xfixes
                 .xcb_xfixes_get_cursor_image_unchecked(self.conn as _);
-
-            let reply =
-                self.xcb
-                    .xcb_get_input_focus_reply(self.conn as _, focus_cookie, ptr::null_mut());
-            let input_focus = OwnedMem::new(reply).ok_or(anyhow!("xcb_get_input_focus failed"))?;
-            let focused = input_focus.as_ref().focus == self.window;
 
             let reply = self.xcb.xcb_translate_coordinates_reply(
                 self.conn as _,
@@ -133,19 +123,18 @@ impl CursorManager for XcbWindow {
             let pixels = ptr::NonNull::new(image as *mut u8);
 
             let curr_serial = cursor_image.as_ref().cursor_serial;
-            let pixels = if !prev_focused && focused || serial != curr_serial || serial == 0 {
+            let pixels = if serial != curr_serial || serial == 0 {
                 pixels
             } else {
                 None
             };
-            let curr_serial = ((focused as u64) << 32) | (curr_serial as u64);
+            let curr_serial = curr_serial as u64;
 
             Ok(Box::new(XcbCursor {
                 geometry,
                 translate_coordinates,
                 cursor_image,
                 pixels,
-                focused,
                 serial: curr_serial,
             }))
         }
@@ -157,9 +146,6 @@ impl CursorSnapshot for XcbCursor {
         self.serial
     }
     fn entered(&self) -> bool {
-        if !self.focused {
-            return false;
-        }
         unsafe {
             let (x, y) = self.position();
             let cursor_image = self.cursor_image.as_ref();

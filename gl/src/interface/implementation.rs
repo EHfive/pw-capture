@@ -314,15 +314,37 @@ pub unsafe extern "C" fn impl_eglCreateWindowSurface(
     surface
 }
 
+pub unsafe fn fixup_native_pixmap(
+    dpy: egl_t::EGLDisplay,
+    native_window: *mut c_void,
+) -> *mut c_void {
+    if let Some(display) = DISPLAY_MAP.get(&glhandle!(dpy)) {
+        if let Some(egl_display) = display.egl_display.as_ref() {
+            if let Some(platform) = egl_display.platform.as_ref() {
+                match *platform {
+                    // see https://gitlab.freedesktop.org/mesa/mesa/-/blob/f83a0e0a14ed871889a551dc0e24480ad9e0edaa/src/egl/main/eglapi.c#L1166-1190
+                    EglPlatform::X11 | EglPlatform::Xcb => {
+                        return *(native_window as *mut *mut c_void)
+                    }
+                    _ => (),
+                }
+            }
+        }
+    }
+    native_window
+}
+
 #[allow(non_snake_case)]
 #[inline(never)]
 pub unsafe extern "C" fn impl_eglCreatePlatformWindowSurface(
     dpy: egl_t::EGLDisplay,
     config: egl_t::EGLConfig,
-    native_window: *mut c_void,
+    mut native_window: *mut c_void,
     attrib_list: *const isize,
 ) -> egl_t::EGLSurface {
     let egl = egl();
+
+    native_window = fixup_native_pixmap(dpy, native_window);
 
     let surface = egl.CreatePlatformWindowSurface(dpy, config, native_window, attrib_list);
     let _ = try_init_surface(NativeIface::Egl, dpy, surface, Some(native_window as _));
@@ -334,10 +356,12 @@ pub unsafe extern "C" fn impl_eglCreatePlatformWindowSurface(
 pub unsafe extern "C" fn impl_eglCreatePlatformWindowSurfaceEXT(
     dpy: egl_t::EGLDisplay,
     config: egl_t::EGLConfig,
-    native_window: *mut c_void,
+    mut native_window: *mut c_void,
     attrib_list: *const i32,
 ) -> egl_t::EGLSurface {
     let egl = egl();
+
+    native_window = fixup_native_pixmap(dpy, native_window);
 
     let surface = egl.CreatePlatformWindowSurfaceEXT(dpy, config, native_window, attrib_list);
     let _ = try_init_surface(NativeIface::Egl, dpy, surface, Some(native_window as _));

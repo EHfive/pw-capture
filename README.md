@@ -27,7 +27,7 @@ flowchart LR
 
 | Crate                          |                                                                                           |
 | ------------------------------ | ----------------------------------------------------------------------------------------- |
-| [pw-capture-client](./client/) | A graphics API agnostic PipeWire client library specialized for queued video capture      |
+| [pw-capture-client](./client/) | A PipeWire client library specialized for queued video capture                            |
 | [pw-capture-vk](./vulkan/)     | A Vulkan layer that can export copies of presented images in DMA-BUF                      |
 | [pw-capture-gl](./gl/)         | An OpenGL (GLX/EGL) intercept layer that can export copies of presented images in DMA-BUF |
 
@@ -71,10 +71,11 @@ ENABLE_PW_CAPTURE=1 vkcube
 
 ### Requirements
 
-- pipewire:  `>=0.3.41`
+- pipewire: `>=0.3.41`
 - libffi: Wayland event dispatching
 
 Below are implicit dependencies and would be loaded on demand
+
 - libx11, libxcb: DRI3 buffer export and X11/XCB cursor query
 - libwayland-client: Wayland cursor interception
 - libglvnd: libEGL, libGLX/libGL interception
@@ -155,11 +156,11 @@ gst-launch-1.0 -e pipewiresrc target-object=999 min-buffers=64 \
 - [x] OpenGL support
 - [x] Passing cursor position & bitmap in buffer meta (X11)
 - [x] Wayland cursor capture (by intercepting libwayland-client)
+- [x] Better handling of node description & Wine application node name
 - [ ] Support export image that maps or copies to memfd as fallback of DMA-BUF export
 - [ ] Add more control options (via env vars or config file)
 - [ ] Support color conversion to common YUV formats with render pipeline
 - [ ] Renegotiate stream format on Vulkan swapchain recreation
-- [ ] Better handling of node description & Wine application node name
 - [ ] Allows single buffer display mode
 - [ ] Saner error handling, make sure dangling resources are freed before return
 - [ ] Support alternative server protocol (may be obs-vkcapture)

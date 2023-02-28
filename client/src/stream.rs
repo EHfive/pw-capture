@@ -670,9 +670,10 @@ impl StreamImpl {
         info: StreamInfo,
         on_terminate: Box<dyn FnOnce()>,
     ) -> Result<Self> {
+        let name = format!("{} (pw-capture)", get_app_name());
         let stream = pw::stream::Stream::<StreamData>::new(
             core,
-            "swapchain",
+            name.as_str(),
             properties! {
                 *pw::keys::MEDIA_TYPE => "Video",
                 *pw::keys::MEDIA_CATEGORY => "Capture",
@@ -680,6 +681,7 @@ impl StreamImpl {
                 *pw::keys::MEDIA_CLASS => "Video/Source",
                 *pw::keys::MEDIA_SOFTWARE => "pw-capture",
                 *pw::keys::NODE_WANT_DRIVER => "false",
+                *pw::keys::NODE_DESCRIPTION => name.as_str(),
             },
         )?;
 

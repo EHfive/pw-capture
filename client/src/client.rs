@@ -195,7 +195,8 @@ fn pw_thread(
     let context = pw::Context::with_properties(
         &mainloop,
         properties! {
-            *pw::keys::CONFIG_NAME => "client-rt.conf"
+            *pw::keys::CONFIG_NAME => "client-rt.conf",
+            *pw::keys::APP_NAME => get_app_name(),
         },
     )?;
 

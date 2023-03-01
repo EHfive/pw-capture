@@ -307,8 +307,6 @@ pub unsafe extern "C" fn impl_eglCreateWindowSurface(
 ) -> egl_t::EGLSurface {
     let egl = egl();
 
-    let win = *(win as *const *const c_void);
-
     let surface = egl.CreateWindowSurface(dpy, config, win, attrib_list);
     let _ = try_init_surface(NativeIface::Egl, dpy, surface, Some(win as _));
     surface

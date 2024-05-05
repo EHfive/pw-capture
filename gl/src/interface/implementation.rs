@@ -20,7 +20,7 @@ use pw_capture_client as client;
 use pw_capture_cursor as local_cursor;
 use pw_capture_cursor::CursorManager;
 use pw_capture_gl_sys::prelude::*;
-use sentinel::{Null, SSlice};
+use sentinel::SSlice;
 
 const MAX_BUFFERS: u32 = 32;
 
@@ -1000,7 +1000,7 @@ unsafe fn glx_export_dmabuf(
         return Err(anyhow!("no xcb connection"));
     }
 
-    let attrib_list = SSlice::<_, Null>::from_slice(&[
+    let attrib_list = SSlice::<_>::from_slice(&[
         glx_sys::BIND_TO_TEXTURE_RGBA_EXT,
         1,
         glx_sys::DRAWABLE_TYPE,
@@ -1028,7 +1028,7 @@ unsafe fn glx_export_dmabuf(
         return Err(anyhow!("no available framebuffer config"));
     }
 
-    let attrib_list = SSlice::<_, Null>::from_slice(&[
+    let attrib_list = SSlice::<_>::from_slice(&[
         glx_sys::TEXTURE_TARGET_EXT,
         glx_sys::TEXTURE_2D_EXT,
         glx_sys::TEXTURE_FORMAT_EXT,

@@ -10,29 +10,29 @@ repository = "https://github.com/EHfive/pw-capture"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-anyhow = "1.0.68"
-crossbeam-channel = { version = "0.5.6", default-features = false }
-dashmap = "5.4.0"
+anyhow = "1.0.82"
+crossbeam-channel = { version = "0.5.12", default-features = false }
+dashmap = "5.5.2"
 escher = { version = "0.3.0", git = "https://github.com/petrosagg/escher" }
 libspa = "0.8.0"
 libspa-sys = "0.8.0"
-log = "0.4.17"
-num_enum = "0.5.9"
+log = "0.4.21"
+num_enum = "0.7.2"
 pipewire = { version = "0.8.0", features = ["v0_3_41"] }
 pipewire-sys = "0.8.0"
 
 [dependencies.ash]
-version = "0.37.1"
+version = "0.37.3"
 default-features = false
 optional = true
 
 [dependencies.educe]
-version = "0.4.20"
+version = "0.5.4"
 default-features = false
 features = ["Debug"]
 
 [dependencies.libc]
-version = "0.2.139"
+version = "0.2.154"
 default-features = false
 
 [dependencies.trait-enumizer]

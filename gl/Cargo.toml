@@ -13,22 +13,22 @@ license = "MIT OR Apache-2.0"
 crate-type = ["cdylib"]
 
 [dependencies]
-anyhow = "1.0.68"
-dashmap = "5.4.0"
+anyhow = "1.0.82"
+dashmap = "5.5.2"
 function_name = "0.3.0"
-once_cell = "1.17.0"
+once_cell = "1.19.0"
 pw-capture-cursor = { version = "0.0.1", path = "../cursor" }
 
 [dependencies.elf]
-version = "0.7.1"
+version = "0.7.4"
 default-features = false
 
 [dependencies.libc]
-version = "0.2.139"
+version = "0.2.154"
 default-features = false
 
 [dependencies.log]
-version = "0.4.17"
+version = "0.4.21"
 features = ["std", "release_max_level_info"]
 
 [dependencies.pw-capture-client]
@@ -39,7 +39,7 @@ features = ["frontend_gl"]
 path = "../gl-sys"
 
 [dependencies.sentinel]
-version = "0.4.0"
+version = "0.5.4"
 default-features = false
 
 [features]

@@ -20,7 +20,7 @@ use ash::vk;
 use ash_layer::*;
 use dashmap::DashMap;
 use function_name::named;
-use libc;
+
 use once_cell::sync::{Lazy, OnceCell};
 
 const MAX_BUFFERS: u32 = 128;
@@ -108,7 +108,7 @@ struct LayerSwapchain {
     cursor_serial: AtomicU64,
 }
 
-static LOGGING: Lazy<()> = Lazy::new(|| init_logger());
+static LOGGING: Lazy<()> = Lazy::new(init_logger);
 
 static CLIENT: Lazy<Option<client::Client>> = Lazy::new(|| {
     client::Client::new()
@@ -120,16 +120,16 @@ static GIPA: OnceCell<vk::PFN_vkGetInstanceProcAddr> = OnceCell::new();
 static ENTRY: OnceCell<ash::Entry> = OnceCell::new();
 
 // DashMap ensures thread-safely
-static INSTANCE_MAP: Lazy<DashMap<vk::Instance, LayerInstance>> = Lazy::new(|| DashMap::new());
+static INSTANCE_MAP: Lazy<DashMap<vk::Instance, LayerInstance>> = Lazy::new(DashMap::new);
 static PHY_TO_INSTANCE_MAP: Lazy<DashMap<vk::PhysicalDevice, vk::Instance>> =
-    Lazy::new(|| DashMap::new());
+    Lazy::new(DashMap::new);
 static GDPA_MAP: Lazy<DashMap<vk::Device, vk::PFN_vkGetDeviceProcAddr>> =
-    Lazy::new(|| DashMap::new());
-static DEVICE_MAP: Lazy<DashMap<vk::Device, LayerDevice>> = Lazy::new(|| DashMap::new());
-static QUEUE_MAP: Lazy<DashMap<vk::Queue, LayerQueue>> = Lazy::new(|| DashMap::new());
-static SURFACE_MAP: Lazy<DashMap<vk::SurfaceKHR, LayerSurface>> = Lazy::new(|| DashMap::new());
+    Lazy::new(DashMap::new);
+static DEVICE_MAP: Lazy<DashMap<vk::Device, LayerDevice>> = Lazy::new(DashMap::new);
+static QUEUE_MAP: Lazy<DashMap<vk::Queue, LayerQueue>> = Lazy::new(DashMap::new);
+static SURFACE_MAP: Lazy<DashMap<vk::SurfaceKHR, LayerSurface>> = Lazy::new(DashMap::new);
 static SWAPCHAIN_MAP: Lazy<DashMap<vk::SwapchainKHR, LayerSwapchain>> =
-    Lazy::new(|| DashMap::new());
+    Lazy::new(DashMap::new);
 
 macro_rules! map_err {
     ($e:expr) => {{
@@ -206,7 +206,7 @@ unsafe extern "system" fn pwcap_vkGetInstanceProcAddr(
     p_name: *const c_char,
 ) -> vk::PFN_vkVoidFunction {
     let name = CStr::from_ptr(p_name);
-    loop {
+    'outer: {
         let pfn: *const () = match name.to_bytes() {
             b"vkGetInstanceProcAddr" => pwcap_vkGetInstanceProcAddr as _,
             b"vkCreateInstance" => pwcap_vkCreateInstance as _,
@@ -214,7 +214,7 @@ unsafe extern "system" fn pwcap_vkGetInstanceProcAddr(
             b"vkGetDeviceProcAddr" => pwcap_vkGetDeviceProcAddr as _,
             b"vkCreateDevice" => pwcap_vkCreateDevice as _,
             b"vkDestroyDevice" => pwcap_vkDestroyDevice as _,
-            _ => break,
+            _ => break 'outer,
         };
         debug!(
             "intercept instance function {} {:?}",
@@ -225,19 +225,17 @@ unsafe extern "system" fn pwcap_vkGetInstanceProcAddr(
     }
 
     let gipa = GIPA.get()?;
-    let res = gipa(instance, p_name);
-    if res.is_none() {
-        // for extension command, return NULL if next layer does not support given command
-        return None;
-    }
 
-    loop {
+    // for extension command, return NULL if next layer does not support given command
+    let res = gipa(instance, p_name)?;
+
+    'outer: {
         let pfn: *const () = match name.to_bytes() {
             b"vkCreateXlibSurfaceKHR" => pwcap_vkCreateXlibSurfaceKHR as _,
             b"vkCreateXcbSurfaceKHR" => pwcap_vkCreateXcbSurfaceKHR as _,
             b"vkCreateWaylandSurfaceKHR" => pwcap_vkCreateWaylandSurfaceKHR as _,
             b"vkDestroySurfaceKHR" => pwcap_vkDestroySurfaceKHR as _,
-            _ => break,
+            _ => break 'outer,
         };
         debug!(
             "intercept instance function {} {:?}",
@@ -246,7 +244,7 @@ unsafe extern "system" fn pwcap_vkGetInstanceProcAddr(
         );
         return mem::transmute(pfn);
     }
-    res
+    Some(res)
 }
 const _: vk::PFN_vkGetInstanceProcAddr = pwcap_vkGetInstanceProcAddr;
 
@@ -257,12 +255,12 @@ unsafe extern "system" fn pwcap_vkGetDeviceProcAddr(
     p_name: *const c_char,
 ) -> vk::PFN_vkVoidFunction {
     let name = CStr::from_ptr(p_name);
-    loop {
+    'outer: {
         let pfn: *const () = match name.to_bytes() {
             b"vkGetDeviceProcAddr" => pwcap_vkGetDeviceProcAddr as _,
             b"vkCreateDevice" => pwcap_vkCreateDevice as _,
             b"vkDestroyDevice" => pwcap_vkDestroyDevice as _,
-            _ => break,
+            _ => break 'outer,
         };
         debug!(
             "intercept device function {} {:?}",
@@ -273,20 +271,17 @@ unsafe extern "system" fn pwcap_vkGetDeviceProcAddr(
     }
 
     let gdpa = GDPA_MAP.get(&device)?;
-    let res = gdpa(device, p_name);
-    if res.is_none() {
-        // for extension command, return NULL if next layer does not support given command
-        return None;
-    }
+    // for extension command, return NULL if next layer does not support given command
+    let res = gdpa(device, p_name)?;
 
-    loop {
+    'outer: {
         let pfn: *const () = match name.to_bytes() {
             b"vkCreateSwapchainKHR" => pwcap_vkCreateSwapchainKHR as _,
             b"vkDestroySwapchainKHR" => pwcap_vkDestroySwapchainKHR as _,
             b"vkAcquireNextImageKHR" => pwcap_vkAcquireNextImageKHR as _,
             b"vkAcquireNextImage2KHR" => pwcap_vkAcquireNextImage2KHR as _,
             b"vkQueuePresentKHR" => pwcap_vkQueuePresentKHR as _,
-            _ => break,
+            _ => break 'outer,
         };
         debug!(
             "intercept device function {} {:?}",
@@ -295,12 +290,12 @@ unsafe extern "system" fn pwcap_vkGetDeviceProcAddr(
         );
         return mem::transmute(pfn);
     }
-    res
+    Some(res)
 }
 
 const _: vk::PFN_vkGetDeviceProcAddr = pwcap_vkGetDeviceProcAddr;
 
-const LAYER_INSTANCE_EXTENSIONS: &[&'static CStr] = &[
+const LAYER_INSTANCE_EXTENSIONS: &[&CStr] = &[
     vk::KhrSurfaceFn::name(),
     vk::KhrExternalMemoryCapabilitiesFn::name(),
     vk::KhrGetPhysicalDeviceProperties2Fn::name(),
@@ -350,7 +345,7 @@ unsafe extern "system" fn pwcap_vkCreateInstance(
     debug!("instance extensions: {:?}", extensions);
     let extensions_data: Vec<*const i8> = extensions.iter().map(|ext| ext.as_ptr()).collect();
 
-    let mut create_info_ext = create_info.clone();
+    let mut create_info_ext = create_info;
     create_info_ext.enabled_extension_count = extensions_data.len() as _;
     create_info_ext.pp_enabled_extension_names = extensions_data.as_ptr();
 
@@ -446,7 +441,7 @@ unsafe extern "system" fn pwcap_vkDestroyInstance(
 }
 const _: vk::PFN_vkDestroyInstance = pwcap_vkDestroyInstance;
 
-const LAYER_DEVICE_EXTENSIONS: &[&'static CStr] = &[
+const LAYER_DEVICE_EXTENSIONS: &[&CStr] = &[
     vk::KhrBindMemory2Fn::name(),
     vk::KhrImageFormatListFn::name(),
     vk::KhrMaintenance1Fn::name(),
@@ -502,7 +497,7 @@ unsafe extern "system" fn pwcap_vkCreateDevice(
     debug!("{:?}", extensions);
     let extensions_data: Vec<*const i8> = extensions.iter().map(|ext| ext.as_ptr()).collect();
 
-    let mut create_info_ext = create_info.clone();
+    let mut create_info_ext = create_info;
     create_info_ext.enabled_extension_count = extensions_data.len() as _;
     create_info_ext.pp_enabled_extension_names = extensions_data.as_ptr();
 
@@ -524,7 +519,7 @@ unsafe extern "system" fn pwcap_vkCreateDevice(
     //            i.e. `ash::Device::load()` and `khr::Swapchain::new()`
     GDPA_MAP.insert(device, gdpa);
 
-    let ash_device = ash::Device::load(&instance_fn, device);
+    let ash_device = ash::Device::load(instance_fn, device);
 
     let khr_swapchain = khr::Swapchain::new(ash_instance, &ash_device);
 
@@ -607,7 +602,7 @@ unsafe fn destroy_device(
     }
 
     (ly_device.ash_device.fp_v1_0().destroy_device)(device, p_allocator);
-    return Ok(());
+    Ok(())
 }
 
 #[no_mangle]
@@ -626,7 +621,7 @@ unsafe extern "system" fn dispatch_next_vkGetInstanceProcAddr(
     p_name: *const c_char,
 ) -> vk::PFN_vkVoidFunction {
     let name = CStr::from_ptr(p_name);
-    loop {
+    'outer: {
         let pfn: *const () = match name.to_bytes() {
             b"vkGetInstanceProcAddr" => dispatch_next_vkGetInstanceProcAddr as _,
             b"vkGetDeviceProcAddr" => dispatch_next_vkGetDeviceProcAddr as _,
@@ -637,7 +632,7 @@ unsafe extern "system" fn dispatch_next_vkGetInstanceProcAddr(
             b"vkEnumerateInstanceExtensionProperties" => ptr::null(),
             b"vkEnumerateInstanceLayerProperties" => ptr::null(),
             b"vkEnumerateInstanceVersion" => ptr::null(),
-            _ => break,
+            _ => break 'outer,
         };
         return mem::transmute(pfn);
     }
@@ -652,10 +647,10 @@ unsafe extern "system" fn dispatch_next_vkGetDeviceProcAddr(
     p_name: *const c_char,
 ) -> vk::PFN_vkVoidFunction {
     let name = CStr::from_ptr(p_name);
-    loop {
+    'outer: {
         let pfn: *const () = match name.to_bytes() {
             b"vkGetDeviceProcAddr" => dispatch_next_vkGetDeviceProcAddr as _,
-            _ => break,
+            _ => break 'outer,
         };
         return mem::transmute(pfn);
     }
@@ -672,12 +667,12 @@ unsafe fn init_surface(
 ) {
     debug!("create surface: {:?} raw_handle: {:?}", surface, raw_handle);
     let mut wl_cursor_manager = 0;
-    let cursor_manager: Option<Box<dyn CursorManager + Send + Sync>> = loop {
+    let cursor_manager: Option<Box<dyn CursorManager + Send + Sync>> = 'outer: {
         match raw_handle {
             SurfaceRawHandle::Xlib { dpy: _, window } => {
                 let m = local_cursor::XcbWindow::new_connection(window as _);
                 match m {
-                    Ok(m) => break Some(Box::new(m)),
+                    Ok(m) => break 'outer Some(Box::new(m)),
                     Err(e) => {
                         warn!("failed to create xcb cursor manager {e:?}");
                     }
@@ -689,7 +684,7 @@ unsafe fn init_surface(
             } => {
                 let m = local_cursor::XcbWindow::new_connection(window);
                 match m {
-                    Ok(m) => break Some(Box::new(m)),
+                    Ok(m) => break 'outer Some(Box::new(m)),
                     Err(e) => {
                         warn!("failed to create xcb cursor manager {e:?}");
                     }
@@ -699,7 +694,7 @@ unsafe fn init_surface(
                 wl_cursor_manager = me_eh5_pw_capture_get_wl_cursor_manager(display, surface);
             }
         };
-        break None;
+        break 'outer None;
     };
 
     let ly_surface = LayerSurface {
@@ -862,7 +857,7 @@ unsafe fn on_fixate_format(
         ));
     }
 
-    let (modifier, num_planes) = if info.modifiers.len() > 0 {
+    let (modifier, num_planes) = if !info.modifiers.is_empty() {
         let modifiers = get_supported_modifiers(
             &ly_instance_valid.khr_phy_props2,
             ly_device.phy_device,
@@ -877,8 +872,7 @@ unsafe fn on_fixate_format(
 
         debug!("filtered modifiers: {:?}", modifiers);
 
-        let modifier = modifiers
-            .get(0)
+        let modifier = modifiers.first()
             .ok_or(anyhow!("modifiers {:?} not compatible", info.modifiers))?;
 
         (
@@ -924,10 +918,10 @@ unsafe fn on_fixate_format(
     }
     let (queue, queue_family_index) = command_queue.ok_or(anyhow!("no compatible queue"))?;
 
-    let (command_pool, command_buffers) = loop {
+    let (command_pool, command_buffers) = 'outer: {
         if let Some(data) = ly_swapchain.export_data.take() {
             if data.queue == queue && data.command_buffers.len() >= ly_swapchain.images.len() {
-                break (data.command_pool, data.command_buffers);
+                break 'outer (data.command_pool, data.command_buffers);
             }
             ly_device
                 .ash_device
@@ -949,7 +943,7 @@ unsafe fn on_fixate_format(
         let cmd_buffers = ly_device
             .ash_device
             .allocate_command_buffers(&cmd_buffers_info)?;
-        break (cmd_pool, cmd_buffers);
+        break 'outer (cmd_pool, cmd_buffers);
     };
 
     info!("stream format fixated: {:?}", format_info);
@@ -1128,7 +1122,7 @@ unsafe fn on_process_buffer(
                 atomic::Ordering::Acquire,
             );
             snap.as_cursor_info(old_serial != snap.serial())
-                .map(|info| add_cursor(info));
+                .map(add_cursor);
         }
     }
 
@@ -1174,7 +1168,7 @@ unsafe fn create_stream(
             .iter()
             .filter(|info| {
                 info.transfer == src_format_info.transfer
-                    && !(info.vk_format == src_format_info.vk_format)
+                    && info.vk_format != src_format_info.vk_format
             })
             .cloned();
         core::iter::once(src_format_info).chain(it).collect()
@@ -1453,7 +1447,7 @@ unsafe fn queue_present_khr(
 
     let _wait_semaphores_new = if ly_device.valid.is_some() {
         let res = capture(&ly_device.ash_device, ly_queue.family_index, &present_info);
-        if res.len() > 0 {
+        if !res.is_empty() {
             present_info.wait_semaphore_count = res.len() as _;
             present_info.p_wait_semaphores = res.as_ptr();
         }
@@ -1623,7 +1617,7 @@ unsafe fn capture_swapchain(
         .ok_or(anyhow!("no format fixated"))?;
 
     let vk::Extent2D { width, height } = ly_swapchain.extent;
-    let src_image = ly_swapchain.images[image_index as usize];
+    let src_image = ly_swapchain.images[image_index];
 
     let mut export_image_data = ly_swapchain
         .export_images
@@ -1637,9 +1631,9 @@ unsafe fn capture_swapchain(
         .image_datas
         .get_mut(&src_image)
         .ok_or(anyhow!("src image data removed"))?;
-    data.fence.wait_and_reset(&ash_device)?;
+    data.fence.wait_and_reset(ash_device)?;
 
-    let command_buffer = export_data.command_buffers[image_index as usize];
+    let command_buffer = export_data.command_buffers[image_index];
     ash_device.reset_command_buffer(command_buffer, vk::CommandBufferResetFlags::empty())?;
 
     record_copy_image(

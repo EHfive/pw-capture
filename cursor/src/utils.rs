@@ -22,7 +22,7 @@ pub unsafe fn dlopen(filenames: &[&CStr]) -> Option<*mut c_void> {
             return Some(h);
         }
     }
-    if filenames.len() > 0 {
+    if !filenames.is_empty() {
         log::warn!(
             "failed to load {}",
             filenames[filenames.len() - 1].to_string_lossy()
@@ -44,5 +44,5 @@ pub unsafe fn pointer_is_dereferencable(p: *mut c_void) -> bool {
     let mut valid: c_uchar = 0;
     let res = libc::mincore(addr as _, page_size as _, &mut valid);
 
-    return res >= 0;
+    res >= 0
 }

@@ -51,13 +51,12 @@ pub unsafe extern "C" fn impl_dlvsym(
 ) -> *mut c_void {
     let name = CStr::from_ptr(symbol);
 
-    let res = if let Some(res) = do_intercept(name) {
+    if let Some(res) = do_intercept(name) {
         res
     } else {
         let real_dlvsym = DLSYMS.1.unwrap();
         real_dlvsym(handle, symbol, version)
-    };
-    res
+    }
 }
 const _: DlvsymFunc = impl_dlvsym;
 
@@ -77,7 +76,7 @@ unsafe fn do_intercept(name: &CStr) -> Option<*mut c_void> {
         b"wl_proxy_destroy" => impl_wl_proxy_destroy as _,
         _ => do_intercept_egl(name).or_else(|| do_intercept_glx(name))?,
     };
-    return Some(pfn);
+    Some(pfn)
 }
 
 #[named]
@@ -95,7 +94,7 @@ unsafe fn do_intercept_glx(name: &CStr) -> Option<*mut c_void> {
         _ => return None,
     };
     debug!("address: {:?} proc: {}", pfn, name.to_string_lossy());
-    return Some(pfn);
+    Some(pfn)
 }
 
 #[named]
@@ -120,7 +119,7 @@ unsafe fn do_intercept_egl(name: &CStr) -> Option<*mut c_void> {
         _ => return None,
     };
     debug!("address: {:?} proc: {}", pfn, name.to_string_lossy());
-    return Some(pfn);
+    Some(pfn)
 }
 
 #[allow(non_snake_case)]
@@ -308,7 +307,7 @@ pub unsafe extern "C" fn impl_eglCreateWindowSurface(
     let egl = egl();
 
     let surface = egl.CreateWindowSurface(dpy, config, win, attrib_list);
-    let _ = try_init_surface(NativeIface::Egl, dpy, surface, Some(win as _));
+    try_init_surface(NativeIface::Egl, dpy, surface, Some(win as _));
     surface
 }
 
@@ -345,7 +344,7 @@ pub unsafe extern "C" fn impl_eglCreatePlatformWindowSurface(
     native_window = fixup_native_pixmap(dpy, native_window);
 
     let surface = egl.CreatePlatformWindowSurface(dpy, config, native_window, attrib_list);
-    let _ = try_init_surface(NativeIface::Egl, dpy, surface, Some(native_window as _));
+    try_init_surface(NativeIface::Egl, dpy, surface, Some(native_window as _));
     surface
 }
 
@@ -362,7 +361,7 @@ pub unsafe extern "C" fn impl_eglCreatePlatformWindowSurfaceEXT(
     native_window = fixup_native_pixmap(dpy, native_window);
 
     let surface = egl.CreatePlatformWindowSurfaceEXT(dpy, config, native_window, attrib_list);
-    let _ = try_init_surface(NativeIface::Egl, dpy, surface, Some(native_window as _));
+    try_init_surface(NativeIface::Egl, dpy, surface, Some(native_window as _));
     surface
 }
 
@@ -531,7 +530,7 @@ unsafe fn capture(
             gl.Finish();
         }
 
-        gl.DeleteFramebuffers(1, &mut fbo);
+        gl.DeleteFramebuffers(1, &fbo);
     }
     gl.BindFramebuffer(gl_sys::READ_FRAMEBUFFER, prev_read_fbo as _);
     gl.BindFramebuffer(gl_sys::DRAW_FRAMEBUFFER, prev_draw_fbo as _);
@@ -661,18 +660,18 @@ unsafe fn try_init_surface(
         _ => platform_surface.map(|v| glhandle!(v)),
     };
 
-    let cursor_manager: Option<Box<dyn CursorManager + Send + Sync>> = loop {
+    let cursor_manager: Option<Box<dyn CursorManager + Send + Sync>> = 'outer: {
         let platform_surface = if let Some(v) = platform_surface {
             v
         } else {
-            break None;
+            break 'outer None;
         };
         match native {
             NativeIface::Egl => {
                 let ly_display = if let Some(v) = DISPLAY_MAP.get(&dpy_handle) {
                     v
                 } else {
-                    break None;
+                    break 'outer None;
                 };
                 let EglDisplay {
                     platform_display,
@@ -680,20 +679,20 @@ unsafe fn try_init_surface(
                 } = if let Some(v) = &ly_display.egl_display {
                     v
                 } else {
-                    break None;
+                    break 'outer None;
                 };
 
                 if let Some(platform) = platform {
                     match *platform {
                         EglPlatform::X11 => {
-                            break create_xcb_cursor_manager(
+                            break 'outer create_xcb_cursor_manager(
                                 Some(platform_display.as_ptr()),
                                 false,
                                 platform_surface.as_raw() as _,
                             );
                         }
                         EglPlatform::Xcb => {
-                            break create_xcb_cursor_manager(
+                            break 'outer create_xcb_cursor_manager(
                                 Some(platform_display.as_ptr()),
                                 true,
                                 platform_surface.as_raw() as _,
@@ -708,7 +707,7 @@ unsafe fn try_init_surface(
                                 platform_surface, wl_surface
                             );
                             if wl_surface.is_null() {
-                                break None;
+                                break 'outer None;
                             }
                             let m = WL_INTERCEPT.as_ref().and_then(|intercept| {
                                 intercept.get_cursor_manager(
@@ -717,7 +716,7 @@ unsafe fn try_init_surface(
                                 )
                             });
                             if let Some(m) = m {
-                                break Some(Box::new(m));
+                                break 'outer Some(Box::new(m));
                             }
                         }
                         _ => (),
@@ -725,14 +724,22 @@ unsafe fn try_init_surface(
                 } else {
                     // fallback to X11/XCB platform,
                     // returns None if window does not exists in default connection
-                    break create_xcb_cursor_manager(None, false, platform_surface.as_raw() as _);
+                    break 'outer create_xcb_cursor_manager(
+                        None,
+                        false,
+                        platform_surface.as_raw() as _,
+                    );
                 }
             }
             NativeIface::Glx => {
-                break create_xcb_cursor_manager(Some(dpy), false, platform_surface.as_raw() as _)
+                break 'outer create_xcb_cursor_manager(
+                    Some(dpy),
+                    false,
+                    platform_surface.as_raw() as _,
+                )
             }
         }
-        break None;
+        break 'outer None;
     };
 
     let ly_surface = LayerSurface {
@@ -824,15 +831,15 @@ unsafe fn try_init_capture(
 unsafe fn destroy_surface(dpy: *const c_void, surface: *const c_void) {
     debug!("{:?} {:?}", dpy, surface);
     let handle = glhandle!(surface);
-    loop {
+    'outer: {
         if let Some(ly_surface) = SURFACE_MAP.get(&handle) {
             if ly_surface.capture.is_none() {
-                break;
+                break 'outer;
             }
             if let Some(context) = get_current_context(ly_surface.native) {
                 if let Some(ly_capture) = &ly_surface.capture {
                     if ly_capture.context == context {
-                        break;
+                        break 'outer;
                     }
                     warn!("context changed: {:?} -> {:?}", ly_capture.context, context);
                 }
@@ -922,9 +929,9 @@ unsafe fn egl_export_dmabuf(
         return Err(anyhow!("require EGL 1.5 or EGL_KHR_image_base"));
     };
 
-    let err = loop {
+    let err = 'outer: {
         if image.is_null() {
-            break anyhow!("failed to create EGLImage");
+            break 'outer anyhow!("failed to create EGLImage");
         }
         let mut fourcc: i32 = 0;
         let mut num_planes: i32 = 0;
@@ -932,7 +939,7 @@ unsafe fn egl_export_dmabuf(
         let res =
             egl.ExportDMABUFImageQueryMESA(dpy, image, &mut fourcc, &mut num_planes, &mut modifier);
         if res != 1 {
-            break anyhow!("failed to query export dmabuf info");
+            break 'outer anyhow!("failed to query export dmabuf info");
         }
         let mut fds = vec![0i32; num_planes as usize];
         let mut strides = vec![0i32; num_planes as usize];
@@ -945,12 +952,11 @@ unsafe fn egl_export_dmabuf(
             offsets.as_mut_ptr(),
         );
         if res != 1 {
-            break anyhow!("failed to export dmabuf");
+            break 'outer anyhow!("failed to export dmabuf");
         }
         let image = TextureImage::EglImage(glhandle!(image));
 
         let planes = (0..num_planes as usize)
-            .into_iter()
             .map(|i| client::BufferPlaneInfo {
                 fd: fds[i] as _,
                 offset: offsets[i] as _,
@@ -1037,7 +1043,7 @@ unsafe fn glx_export_dmabuf(
     let glx_pixmap = glx.CreatePixmap(dpy as _, *fb_configs, x_pixmap, attrib_list.as_ptr() as _);
     (x11.XFree)(fb_configs as _);
 
-    let err = loop {
+    let err = 'outer: {
         gl.BindTexture(gl_sys::TEXTURE_2D, texture);
         glx.BindTexImageEXT(
             dpy as _,
@@ -1049,7 +1055,7 @@ unsafe fn glx_export_dmabuf(
         let cookie = (x11.xcb_dri3_buffers_from_pixmap)(xcb_conn, x_pixmap as _);
         let reply = (x11.xcb_dri3_buffers_from_pixmap_reply)(xcb_conn, cookie, ptr::null_mut());
         if reply.is_null() {
-            break anyhow!("failed to get DRI3 buffer from pixmap");
+            break 'outer anyhow!("failed to get DRI3 buffer from pixmap");
         }
         let reply = &mut *reply;
 
@@ -1078,7 +1084,6 @@ unsafe fn glx_export_dmabuf(
             .collect();
 
         libc::free(reply as *mut _ as _);
-        drop(reply);
 
         // XXX: why it's BGR instead of RGB?
         return Ok((client::Format::BGRA, modifier, image, planes));
@@ -1251,8 +1256,9 @@ fn on_process_buffer(
                     atomic::Ordering::Acquire,
                 );
 
-                snap.as_cursor_info(old_serial != snap.serial())
-                    .map(|info| add_cursor(info));
+                if let Some(info) = snap.as_cursor_info(old_serial != snap.serial()) {
+                    add_cursor(info)
+                }
             }
         }
     }

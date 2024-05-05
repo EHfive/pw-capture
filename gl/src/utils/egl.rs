@@ -26,15 +26,15 @@ pub fn egl_platform_from_ext(platform_ext: u32) -> EglPlatform {
 }
 
 fn egl_get_native_platform_from_env() -> Option<EglPlatform> {
-    let plat_name = loop {
+    let plat_name = 'outer: {
         if let Ok(plat_name) = env::var("EGL_PLATFORM") {
-            if plat_name.len() > 0 {
-                break plat_name;
+            if !plat_name.is_empty() {
+                break 'outer plat_name;
             }
         }
         if let Ok(plat_name) = env::var("EGL_DISPLAY") {
-            if plat_name.len() > 0 {
-                break plat_name;
+            if !plat_name.is_empty() {
+                break 'outer plat_name;
             }
         }
         return None;
@@ -63,7 +63,7 @@ unsafe fn egl_pointer_is_dereferencable(p: *mut c_void) -> bool {
     let mut valid: c_uchar = 0;
     let res = libc::mincore(addr as _, page_size as _, &mut valid);
 
-    return res >= 0;
+    res >= 0
 }
 
 unsafe fn egl_native_platform_detect_native_display(

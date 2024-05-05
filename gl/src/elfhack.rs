@@ -263,7 +263,7 @@ mod tests {
                     );
                 }
             }
-            println!("");
+            println!();
 
             ControlFlow::Continue(())
         });

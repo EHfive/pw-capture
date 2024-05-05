@@ -31,7 +31,7 @@ pub unsafe fn dlopen(filenames: &[&CStr]) -> Option<*mut c_void> {
             return Some(h);
         }
     }
-    if filenames.len() > 0 {
+    if !filenames.is_empty() {
         log::warn!(
             "failed to load {}",
             filenames[filenames.len() - 1].to_string_lossy()

@@ -716,7 +716,7 @@ impl WlIntercept {
         if implementation.is_null() {
             return ptr::null_mut();
         }
-        (&*implementation).raw_implementation
+        (*implementation).raw_implementation
     }
 
     pub unsafe fn intercept_wl_proxy_destroy(&'static self, proxy: *mut wl_proxy) {
@@ -788,11 +788,11 @@ unsafe fn dispatch_event(
 
     for (i, sig) in WlSignatureIter::new(msg.signature).enumerate() {
         ffi_types.push(sig.into());
-        let wl_arg = &*args.offset(i as _);
+        let wl_arg = &*args.add(i);
         ffi_args.push(WlArg(sig, wl_arg).into());
     }
 
     let cif = Cif::new(ffi_types, Type::void());
     cif.call::<()>(CodePtr(callback as _), &ffi_args);
-    return 0;
+    0
 }

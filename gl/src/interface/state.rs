@@ -15,7 +15,7 @@ use once_cell::sync::Lazy;
 use pw_capture_client as client;
 use pw_capture_cursor::WlIntercept;
 
-pub static GLOBAL_INIT: Lazy<()> = Lazy::new(|| init_logger());
+pub static GLOBAL_INIT: Lazy<()> = Lazy::new(init_logger);
 
 pub static DLSYMS: Lazy<(DlsymFunc, Option<DlvsymFunc>)> = Lazy::new(|| {
     Lazy::force(&GLOBAL_INIT);
@@ -33,15 +33,15 @@ type PFN_GetProcAddress = unsafe extern "C" fn(proc_name: *const c_char) -> *mut
 
 unsafe fn load_gpa(filenames: &[&CStr], symbol: &CStr) -> Option<PFN_GetProcAddress> {
     Lazy::force(&GLOBAL_INIT);
-    let res = loop {
+    let res = 'outer: {
         let gpa = real_dlsym(RTLD_NEXT, symbol.as_ptr());
         if !gpa.is_null() {
-            break gpa;
+            break 'outer gpa;
         }
         let handle = dlopen(filenames)?;
         let gpa = real_dlsym(handle, symbol.as_ptr());
         if !gpa.is_null() {
-            break gpa;
+            break 'outer gpa;
         }
 
         log::warn!("failed to load {}", symbol.to_string_lossy());
@@ -103,8 +103,8 @@ pub static CLIENT: Lazy<Option<client::Client>> = Lazy::new(|| {
         .ok()
 });
 
-pub static DISPLAY_MAP: Lazy<DashMap<GlHandle, LayerDisplay>> = Lazy::new(|| DashMap::new());
-pub static SURFACE_MAP: Lazy<DashMap<GlHandle, LayerSurface>> = Lazy::new(|| DashMap::new());
+pub static DISPLAY_MAP: Lazy<DashMap<GlHandle, LayerDisplay>> = Lazy::new(DashMap::new);
+pub static SURFACE_MAP: Lazy<DashMap<GlHandle, LayerSurface>> = Lazy::new(DashMap::new);
 
 #[inline]
 pub fn glx() -> &'static Glx {

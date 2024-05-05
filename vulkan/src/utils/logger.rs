@@ -14,7 +14,7 @@ impl Log for SimpleLogger {
         true
     }
     fn log(&self, record: &log::Record) {
-        let _ = eprintln!(
+        eprintln!(
             "[pw-capture-vk] {:>5} [{}:{}] [{}] {}",
             record.level(),
             record.file().unwrap_or_default(),
@@ -60,8 +60,8 @@ macro_rules! error {
     ($($arg:tt)+) => (::log::log!(target: function_name!(), ::log::Level::Error, $($arg)+));
 }
 
-pub use crate::warn;
-pub use debug;
-pub use error;
-pub use info;
+
+
+
+
 pub use trace;

@@ -9,7 +9,7 @@ use dashmap::DashMap;
 use once_cell::sync::Lazy;
 
 static CURSOR_MANAGER_MAP: Lazy<DashMap<usize, Box<WlCursorManager>>> =
-    Lazy::new(|| DashMap::new());
+    Lazy::new(DashMap::new);
 
 #[no_mangle]
 pub unsafe fn me_eh5_pw_capture_get_wl_cursor_manager(
@@ -22,7 +22,7 @@ pub unsafe fn me_eh5_pw_capture_get_wl_cursor_manager(
     let manager = WL_INTERCEPT
         .as_ref()
         .and_then(|intercept| intercept.get_cursor_manager(display as _, surface as _))
-        .map(|m| Box::new(m));
+        .map(Box::new);
     if let Some(m) = manager {
         let handle = m.as_ref() as *const _ as usize;
         CURSOR_MANAGER_MAP.insert(handle, m);

@@ -14,7 +14,7 @@ impl Log for SimpleLogger {
         true
     }
     fn log(&self, record: &log::Record) {
-        let _ = eprintln!(
+        eprintln!(
             "[pw-capture-gl] {:>5} [{}:{}] [{}] {}",
             record.level(),
             record.file().unwrap_or_default(),

@@ -13,7 +13,7 @@ use educe::Educe;
 use escher::{Escher, Rebindable};
 use log::{debug, trace};
 use pipewire as pw;
-use pw::properties;
+use pw::properties::properties;
 use trait_enumizer::{crossbeam_class, enumizer};
 
 #[enumizer(
@@ -35,15 +35,15 @@ struct ClientImpl {
 }
 
 struct ClientImplInner {
-    mainloop: pw::MainLoop,
-    core: pw::Core,
+    mainloop: pw::main_loop::MainLoop,
+    core: pw::core::Core,
     stream_next_id: usize,
     stream_map: DashMap<usize, Escher<'static, StreamImplItem<'static>>>,
 }
 
 #[derive(Rebindable)]
 struct StreamImplItem<'a> {
-    _loop_: &'a pw::LoopRef,
+    _loop_: &'a pw::loop_::LoopRef,
     _receiver: pw::channel::AttachedReceiver<'a, StreamMessage>,
     _stream_impl: StreamImpl,
 }
@@ -77,9 +77,9 @@ impl ClientMethods for ClientImpl {
         let mainloop = self.inner.borrow().mainloop.clone();
         let (pw_sender, pw_receiver) = pw::channel::channel::<StreamMessage>();
         let item = Escher::new(|r| async move {
-            let receiver = stream_impl.attach(&mainloop, pw_receiver);
+            let receiver = stream_impl.attach(mainloop.loop_(), pw_receiver);
             r.capture(StreamImplItem {
-                _loop_: &mainloop,
+                _loop_: mainloop.loop_(),
                 _receiver: receiver,
                 _stream_impl: stream_impl,
             })
@@ -190,9 +190,9 @@ fn pw_thread(
 ) -> Result<()> {
     pw_guard::PipeWireGuard::new();
 
-    let mainloop = pw::MainLoop::new()?;
+    let mainloop = pw::main_loop::MainLoop::new(None)?;
 
-    let context = pw::Context::with_properties(
+    let context = pw::context::Context::with_properties(
         &mainloop,
         properties! {
             *pw::keys::CONFIG_NAME => "client-rt.conf",
@@ -213,7 +213,7 @@ fn pw_thread(
     let client_impl = RefCell::new(ClientImpl {
         inner: Rc::new(RefCell::new(client_impl_inner)),
     });
-    let _receiver = pw_receiver.attach(&mainloop, {
+    let _receiver = pw_receiver.attach(mainloop.loop_(), {
         move |msg| {
             trace!("receive {:?}", msg);
             let _ = msg.try_call_mut(&mut *client_impl.borrow_mut());

@@ -12,10 +12,10 @@ use anyhow::{anyhow, Result};
 use ash::vk;
 use crossbeam_channel::{bounded, Sender};
 use educe::Educe;
+use libspa::pod::Pod;
 use log::{debug, error, info, trace, warn};
 use pipewire as pw;
-use pw::properties;
-use pw::stream::ListenerBuilderT;
+use pw::properties::properties;
 use trait_enumizer::{crossbeam_class, enumizer};
 
 // allows 4 frames latency of buffer processing
@@ -143,7 +143,7 @@ struct StreamData {
 }
 
 struct StreamImplInner {
-    stream: pw::stream::Stream<StreamData>,
+    stream: pw::stream::Stream,
     #[allow(unused)]
     listener: Option<pw::stream::StreamListener<StreamData>>,
     enum_formats: Vec<EnumFormatInfo>,
@@ -378,22 +378,23 @@ impl StreamMethods for StreamImpl {
 unsafe fn on_param_changed(
     inner: &StreamImplInner,
     id: u32,
-    param: *const spa_sys::spa_pod,
+    param: Option<&Pod>,
     width: u32,
     height: u32,
     fixate_format: &Box<dyn Fn(EnumFormatInfo) -> Option<FixateFormat> + Send>,
 ) {
-    debug!("param changed: id {}, param: {:?}", id, param);
-    if param.is_null() || id != spa_sys::SPA_PARAM_Format {
+    debug!("param changed: id {}", id);
+    let Some(parma) = param else {
+        return;
+    };
+    if id != spa_sys::SPA_PARAM_Format {
         return;
     }
-    let pod = deserialize::PodDeserializer::deserialize_ptr::<Value>(ptr::NonNull::new_unchecked(
-        param as _,
-    ));
+    let pod = deserialize::PodDeserializer::deserialize_from::<Value>(parma.as_bytes());
     let pod = match pod {
-        Ok(v) => v,
+        Ok((_, v)) => v,
         Err(e) => {
-            debug!("error parsing pod {:?} {:?}", param, e);
+            debug!("error parsing pod {:?}", e);
             return;
         }
     };
@@ -401,7 +402,7 @@ unsafe fn on_param_changed(
     let raw_info: VideoRawInfo = match pod.clone().try_into() {
         Ok(v) => v,
         Err(e) => {
-            error!("error parsing format info {:?} {:?}", param, e);
+            error!("error parsing format info  {:?}", e);
             return;
         }
     };
@@ -446,7 +447,7 @@ unsafe fn on_param_changed(
             }
             let mut params = params
                 .iter()
-                .map(|p| p.as_ptr() as *const spa_sys::spa_pod)
+                .map(|p| Pod::from_bytes(p).expect("not a valid Pod"))
                 .collect::<Vec<_>>();
 
             let _ = stream.update_params(&mut params);
@@ -463,7 +464,7 @@ unsafe fn on_param_changed(
     );
     let mut params = params
         .iter()
-        .map(|p| p.as_ptr() as *const spa_sys::spa_pod)
+        .map(|p| Pod::from_bytes(p).expect("not a valid Pod"))
         .collect::<Vec<_>>();
 
     let _ = stream.update_params(&mut params);
@@ -606,7 +607,7 @@ unsafe fn fill_cursor_meta(
 }
 
 unsafe fn on_process_buffer(
-    stream: &pw::stream::Stream<StreamData>,
+    stream: &pw::stream::StreamRef,
     data: &mut StreamData,
     buffer: BufferHandle,
     user_process: &ProcessBufferCb,
@@ -666,12 +667,12 @@ unsafe fn on_process_buffer(
 
 impl StreamImpl {
     pub(crate) fn new(
-        core: &pw::Core,
+        core: &pw::core::Core,
         info: StreamInfo,
         on_terminate: Box<dyn FnOnce()>,
     ) -> Result<Self> {
         let name = format!("{} (pw-capture)", get_app_name());
-        let stream = pw::stream::Stream::<StreamData>::new(
+        let stream = pw::stream::Stream::new(
             core,
             name.as_str(),
             properties! {
@@ -708,13 +709,12 @@ impl StreamImpl {
                 cursor_id: 1,
             })
             .state_changed({
-                let stream_impl = stream_impl.clone();
                 let buffer_receiver = buffer_receiver.clone();
-                move |old, new| {
+                move |stream, _data, old, new| {
                     info!("stream state changed: {:?} -> {:?}", old, new);
                     match new {
                         pw::stream::StreamState::Paused => {
-                            let _ = stream_impl.inner.borrow().stream.flush(false);
+                            let _ = stream.flush(false);
                             for _ in buffer_receiver.try_iter() {
                                 // drain buffer channel, in case buffer was not processed
                             }
@@ -726,7 +726,7 @@ impl StreamImpl {
             })
             .param_changed({
                 let stream_impl = stream_impl.clone();
-                move |id, _data, param| unsafe {
+                move |_stream, _data, id, param| unsafe {
                     on_param_changed(
                         &stream_impl.inner.borrow(),
                         id,
@@ -737,8 +737,12 @@ impl StreamImpl {
                     )
                 }
             })
-            .add_buffer(move |buffer| unsafe { on_add_buffer(buffer, &info.add_buffer) })
-            .remove_buffer(move |buffer| unsafe { on_remove_buffer(buffer, &info.remove_buffer) })
+            .add_buffer(move |_stream, _data, buffer| unsafe {
+                on_add_buffer(buffer, &info.add_buffer)
+            })
+            .remove_buffer(move |_stream, _data, buffer| unsafe {
+                on_remove_buffer(buffer, &info.remove_buffer)
+            })
             .process(move |stream, data| unsafe {
                 if let Ok(buffer) = buffer_receiver.try_recv() {
                     on_process_buffer(stream, data, buffer, &info.process_buffer);
@@ -763,11 +767,11 @@ impl StreamImpl {
         }
         let mut params = params
             .iter()
-            .map(|p| p.as_ptr() as *const spa_sys::spa_pod)
+            .map(|p| Pod::from_bytes(p).expect("not a valid Pod"))
             .collect::<Vec<_>>();
 
         stream_impl.inner.borrow().stream.connect(
-            spa::Direction::Output,
+            spa::utils::Direction::Output,
             None,
             pw::stream::StreamFlags::DRIVER
                 | pw::stream::StreamFlags::ALLOC_BUFFERS
@@ -783,7 +787,7 @@ impl StreamImpl {
 
     pub(crate) fn attach<'a>(
         &self,
-        loop_: &'a pw::LoopRef,
+        loop_: &'a pw::loop_::LoopRef,
         pw_receiver: pw::channel::Receiver<StreamMessage>,
     ) -> pw::channel::AttachedReceiver<'a, StreamMessage> {
         let inner_weak = Arc::downgrade(&self.inner);

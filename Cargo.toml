@@ -1,5 +1,6 @@
 [workspace]
 members = ["client", "cursor", "gl", "gl-sys", "vulkan"]
+resolver = "2"
 
 [profile.release]
 strip = true

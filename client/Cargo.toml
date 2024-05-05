@@ -14,14 +14,12 @@ anyhow = "1.0.68"
 crossbeam-channel = { version = "0.5.6", default-features = false }
 dashmap = "5.4.0"
 escher = { version = "0.3.0", git = "https://github.com/petrosagg/escher" }
-libspa = { git = "https://gitlab.freedesktop.org/eh5/pipewire-rs", branch = "pw-capture" }
-libspa-sys = { git = "https://gitlab.freedesktop.org/eh5/pipewire-rs", branch = "pw-capture" }
+libspa = "0.8.0"
+libspa-sys = "0.8.0"
 log = "0.4.17"
 num_enum = "0.5.9"
-pipewire = { git = "https://gitlab.freedesktop.org/eh5/pipewire-rs", branch = "pw-capture", features = [
-    "v0_3_41",
-] }
-pipewire-sys = { git = "https://gitlab.freedesktop.org/eh5/pipewire-rs", branch = "pw-capture" }
+pipewire = { version = "0.8.0", features = ["v0_3_41"] }
+pipewire-sys = "0.8.0"
 
 [dependencies.ash]
 version = "0.37.1"

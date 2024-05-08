@@ -13,13 +13,13 @@ license = "MIT OR Apache-2.0"
 anyhow = "1.0.82"
 crossbeam-channel = { version = "0.5.12", default-features = false }
 dashmap = "5.5.2"
-escher = { version = "0.3.0", git = "https://github.com/petrosagg/escher" }
 libspa = "0.8.0"
 libspa-sys = "0.8.0"
 log = "0.4.21"
 num_enum = "0.7.2"
 pipewire = { version = "0.8.0", features = ["v0_3_41"] }
 pipewire-sys = "0.8.0"
+self_cell = "1.0.4"
 
 [dependencies.ash]
 version = "0.37.3"

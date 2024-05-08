@@ -280,24 +280,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5443807d6dff69373d433ab9ef5378ad8df50ca6298caf15de6e52e24aaf54d5"
 
 [[package]]
-name = "escher"
-version = "0.3.0"
-source = "git+https://github.com/petrosagg/escher#d0e66f0454b7612cde35c11546b2ecd6feffc9e8"
-dependencies = [
- "escher-derive",
- "futures-task",
-]
-
-[[package]]
-name = "escher-derive"
-version = "0.2.0"
-source = "git+https://github.com/petrosagg/escher#d0e66f0454b7612cde35c11546b2ecd6feffc9e8"
-dependencies = [
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
 name = "fixed"
 version = "1.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -749,7 +731,6 @@ dependencies = [
  "crossbeam-channel",
  "dashmap",
  "educe",
- "escher",
  "libc",
  "libspa",
  "libspa-sys",
@@ -757,6 +738,7 @@ dependencies = [
  "num_enum",
  "pipewire",
  "pipewire-sys",
+ "self_cell",
  "trait-enumizer",
 ]
 
@@ -880,6 +862,12 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "self_cell"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d369a96f978623eb3dc28807c4852d6cc617fed53da5d3c400feff1ef34a714a"
 
 [[package]]
 name = "sentinel"

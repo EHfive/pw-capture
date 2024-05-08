@@ -10,10 +10,11 @@ use anyhow::{anyhow, Result};
 use crossbeam_channel::{bounded, Sender};
 use dashmap::DashMap;
 use educe::Educe;
-use escher::{Escher, Rebindable};
 use log::{debug, trace};
 use pipewire as pw;
+use pw::main_loop::MainLoop as PwMainLoop;
 use pw::properties::properties;
+use self_cell::self_cell;
 use trait_enumizer::{crossbeam_class, enumizer};
 
 #[enumizer(
@@ -38,15 +39,19 @@ struct ClientImplInner {
     mainloop: pw::main_loop::MainLoop,
     core: pw::core::Core,
     stream_next_id: usize,
-    stream_map: DashMap<usize, Escher<'static, StreamImplItem<'static>>>,
+    stream_map: DashMap<usize, (StreamImpl, OwnedReceiver)>,
 }
 
-#[derive(Rebindable)]
-struct StreamImplItem<'a> {
-    _loop_: &'a pw::loop_::LoopRef,
-    _receiver: pw::channel::AttachedReceiver<'a, StreamMessage>,
-    _stream_impl: StreamImpl,
-}
+type StreamMessageReceiver<'a> = pw::channel::AttachedReceiver<'a, StreamMessage>;
+
+self_cell!(
+    struct OwnedReceiver {
+        owner: PwMainLoop,
+
+        #[covariant]
+        dependent: StreamMessageReceiver,
+    }
+);
 
 impl ClientMethods for ClientImpl {
     fn terminate(&self) {
@@ -76,16 +81,14 @@ impl ClientMethods for ClientImpl {
 
         let mainloop = self.inner.borrow().mainloop.clone();
         let (pw_sender, pw_receiver) = pw::channel::channel::<StreamMessage>();
-        let item = Escher::new(|r| async move {
-            let receiver = stream_impl.attach(mainloop.loop_(), pw_receiver);
-            r.capture(StreamImplItem {
-                _loop_: mainloop.loop_(),
-                _receiver: receiver,
-                _stream_impl: stream_impl,
-            })
-            .await
+        let receiver = OwnedReceiver::new(mainloop, |mainloop| {
+            stream_impl.attach(mainloop.loop_(), pw_receiver)
         });
-        self.inner.borrow_mut().stream_map.insert(id, item);
+
+        self.inner
+            .borrow_mut()
+            .stream_map
+            .insert(id, (stream_impl, receiver));
 
         Ok(Stream { pw_sender })
     }
@@ -172,8 +175,9 @@ mod pw_guard {
     pub(super) struct PipeWireGuard(());
 
     impl PipeWireGuard {
-        pub(super) fn new() {
+        pub(super) fn new() -> Self {
             pipewire::init();
+            Self(())
         }
     }
 
@@ -188,7 +192,7 @@ fn pw_thread(
     done_sender: Sender<()>,
     pw_receiver: pw::channel::Receiver<ClientMessage>,
 ) -> Result<()> {
-    pw_guard::PipeWireGuard::new();
+    let _ = pw_guard::PipeWireGuard::new();
 
     let mainloop = pw::main_loop::MainLoop::new(None)?;
 

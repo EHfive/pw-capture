@@ -10,7 +10,7 @@ repository = "https://github.com/EHfive/pw-capture"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-anyhow = "1.0.82"
+anyhow = "1.0.83"
 dashmap = "5.5.2"
 fixed = "1.23.1"
 libc = "0.2.154"

@@ -10,7 +10,7 @@ repository = "https://github.com/EHfive/pw-capture"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-anyhow = "1.0.82"
+anyhow = "1.0.83"
 crossbeam-channel = { version = "0.5.12", default-features = false }
 dashmap = "5.5.2"
 libspa = "0.8.0"
@@ -27,7 +27,7 @@ default-features = false
 optional = true
 
 [dependencies.educe]
-version = "0.5.4"
+version = "0.5.11"
 default-features = false
 features = ["Debug"]
 

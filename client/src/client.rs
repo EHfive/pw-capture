@@ -192,7 +192,7 @@ fn pw_thread(
     done_sender: Sender<()>,
     pw_receiver: pw::channel::Receiver<ClientMessage>,
 ) -> Result<()> {
-    let _ = pw_guard::PipeWireGuard::new();
+    let _pw_guard = pw_guard::PipeWireGuard::new();
 
     let mainloop = pw::main_loop::MainLoop::new(None)?;
 

@@ -171,29 +171,10 @@ impl Drop for Client {
     }
 }
 
-mod pw_guard {
-    pub(super) struct PipeWireGuard(());
-
-    impl PipeWireGuard {
-        pub(super) fn new() -> Self {
-            pipewire::init();
-            Self(())
-        }
-    }
-
-    impl Drop for PipeWireGuard {
-        fn drop(&mut self) {
-            unsafe { pipewire::deinit() };
-        }
-    }
-}
-
 fn pw_thread(
     done_sender: Sender<()>,
     pw_receiver: pw::channel::Receiver<ClientMessage>,
 ) -> Result<()> {
-    let _pw_guard = pw_guard::PipeWireGuard::new();
-
     let mainloop = pw::main_loop::MainLoop::new(None)?;
 
     let context = pw::context::Context::with_properties(

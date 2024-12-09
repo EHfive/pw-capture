@@ -13,3 +13,9 @@ option (
   description: 'Custom Rust target, e.g. i686-unknown-linux-gnu',
   type: 'string',
 )
+option (
+  'frozen',
+  description: 'Specify Cargo build option --frozen',
+  type: 'boolean',
+  value: false
+)

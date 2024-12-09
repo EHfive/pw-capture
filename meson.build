@@ -16,6 +16,10 @@ libdir = get_option('libdir')
 datadir = get_option('datadir')
 profile = get_option('profile')
 rust_target = get_option('target')
+frozen = 'false'
+if get_option('frozen')
+  frozen = 'true'
+endif
 
 lib_pw_capture_gl_name = 'libpw-capture-gl.so'
 lib_pw_capture_gl = custom_target('pw-capture-gl',
@@ -28,6 +32,7 @@ lib_pw_capture_gl = custom_target('pw-capture-gl',
     'pw-capture-gl',
     'libpw_capture_gl.so',
     '@OUTPUT@',
+    frozen,
     rust_target
   ],
   console: true,
@@ -48,6 +53,7 @@ lib_pw_capture_vk = custom_target('pw-capture-vk',
     'pw-capture-vk',
     'libpw_capture_vk.so',
     '@OUTPUT@',
+    frozen,
     rust_target
   ],
   console: true,
